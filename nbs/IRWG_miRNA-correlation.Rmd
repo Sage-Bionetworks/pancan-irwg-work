@@ -1,0 +1,128 @@
+---
+title: "PanCan IRWG miRNA Correlative Analysis"
+author: "James A. Eddy"
+date: '`r lubridate::today()`'
+output:
+  html_notebook:
+    code_folding: hide
+    fig_width: 8
+    toc: yes
+    toc_float: yes
+---
+
+# Summary
+
+Exploring associations of miRNA expression levels across tumor types in TCGA with suggested correlates defined by the Immune Response Working Group:
+
++ Overall Leukocyte fraction  
++ Individual Relative CIBERSORT fraction  
++ Mutation Load  
++ TCR,BCR Diversity  
++ Expression of  
+    + IFNG,IFN-gamma  
+    + PRF1,Perforin  
+    + GZMA,Granzyme A  
+    + PDCD1,PD-1  
+    + CD274,PD-L1  
+    + PDCD1LG2,PD-L2  
+    + IL10,IL-10  
+    + TGFB1,TGF-beta  
+    + IDO1,IDO  
+    + HLA-A  
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE, cache=FALSE}
+# Synapse client
+library(synapseClient)
+
+# viz packages
+library(ggthemes)
+library(viridis)
+library(ggbeeswarm)
+
+# packages for general data munging, formatting
+library(feather)
+library(stringr)
+library(forcats)
+library(broom)
+library(tidyverse)
+
+my_theme_bw <- function() {
+    theme_bw() +
+        theme(axis.title = element_text(face = "bold", size = rel(0.9)),
+              legend.title = element_text(face = "bold"),
+              plot.title = element_text(face = "bold"))
+}
+ggplot2::theme_set(my_theme_bw())
+scale_fill_discrete <- function(...) scale_fill_colorblind(...)
+scale_fill_continuous <- function(...) scale_fill_viridis(...)
+scale_colour_discrete <- function(...) scale_color_colorblind(...)
+scale_colour_continuous <- function(...) scale_color_viridis(...)
+```
+
+-----
+
+\  
+
+# Prepare data
+
+## Retrieve miRNA data from Synapse
+
+```{r}
+if (!dir.exists("data")) {
+    dir.create("data")
+}
+synapseLogin()
+mirna_synfolder <- "syn6171109"
+mirna_synfiles <- synapseQuery(
+    sprintf('select * from file where parentId=="%s"', mirna_synfolder)
+)
+
+# download files and store data/paths in new data frame
+mirna_files <- mirna_synfiles %>% 
+    mutate(file_data = map(file.id, function(synid) {
+        synGet(synid, downloadLocation = "data/")
+    }),
+    file_path = map_chr(file_data, getFileLocation))
+```
+
+## Load miRNA data
+
+```{r}
+# load sample data
+mirna_sample_file <- mirna_files %>% 
+    filter(file.id == "syn7222010") %>% 
+    .[["file_path"]]
+mirna_sample_df <- read_tsv(mirna_sample_file)
+
+# load normalized, batch-corrected expression data
+mirna_norm_file <- mirna_files %>% 
+    filter(file.id == "syn7201053") %>% 
+    .[["file_path"]]
+mirna_norm_df <- read_csv(mirna_norm_file)
+```
+
+-----
+
+\  
+
+# Explore miRNA data
+
+```{r}
+# convert expression df to matrix
+mirna_norm_mat <- mirna_norm_df %>% 
+    select(one_of(c("Genes", mirna_sample_df$id))) %>% 
+    column_to_rownames("Genes") %>% 
+    as.matrix()
+mirna_norm_mat[1:5, 1:5]
+```
+
+```{r}
+mirna_norm_mat %>% 
+    rowMeans() %>% 
+    tibble(avg_abundance = .) %>% 
+    ggplot(aes(x = avg_abundance + 1)) +
+    geom_histogram(bins = 50) +
+    scale_x_log10()
+```
+

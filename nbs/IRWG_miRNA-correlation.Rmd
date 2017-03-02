@@ -68,7 +68,9 @@ scale_colour_continuous <- function(...) scale_color_viridis(...)
 
 ## Retrieve miRNA data from Synapse
 
-```{r}
+Data are stored on Synapse in the folder `syn6171109`.
+
+```{r, message=FALSE, warning=FALSE}
 if (!dir.exists("data")) {
     dir.create("data")
 }
@@ -88,18 +90,30 @@ mirna_files <- mirna_synfiles %>%
 
 ## Load miRNA data
 
+Sample characteristics are stored in a tab-delimited text file (Synapse ID: `syn7222010`) and can be loaded with `read_tsv()`.
+
 ```{r}
 # load sample data
 mirna_sample_file <- mirna_files %>% 
     filter(file.id == "syn7222010") %>% 
     .[["file_path"]]
 mirna_sample_df <- read_tsv(mirna_sample_file)
+```
 
+miRNA normalized, batch corrected expression values for all samples are stored as a matrix in a CSV file (Synapse ID: `syn7201053`) and can be loaded with `read_csv()`.
+
+```{r}
 # load normalized, batch-corrected expression data
 mirna_norm_file <- mirna_files %>% 
     filter(file.id == "syn7201053") %>% 
     .[["file_path"]]
-mirna_norm_df <- read_csv(mirna_norm_file)
+mirna_norm_df <- read_csv(mirna_norm_file, progress = FALSE)
+```
+
+```{r}
+mirna_norm_df %>% 
+    group_by(Correction) %>% 
+    tally()
 ```
 
 -----
@@ -108,21 +122,82 @@ mirna_norm_df <- read_csv(mirna_norm_file)
 
 # Explore miRNA data
 
+## Sample characteristics
+
+The table `mirna_sample_df` contains `r ncol(mirna_sample_df)` columns describing the `r nrow(mirna_sample_df)` samples in the data. The `Sample_Type` column corresponds to TCGA **sample type codes**, which are defined [here](https://gdc.cancer.gov/resources-tcga-users/tcga-code-tables/sample-type-codes). The following sample types are included in the miRNA data:
+
+```{r}
+mirna_sample_df %>% 
+    group_by(Sample_Type) %>% 
+    tally()
+```
+
+Based on the codes, this is the distribution of sample types:
+
+```{r}
+mirna_sample_df %>% 
+    group_by(Sample_Type) %>% 
+    tally() %>% 
+    mutate(Definition = case_when(
+        .$Sample_Type == 1 ~ "Primary Solid Tumor",
+        .$Sample_Type == 2 ~ "Recurrent Solid Tumorr",
+        .$Sample_Type == 3 ~ "Primary Blood Derived Cancer - Peripheral Blood",
+        .$Sample_Type == 5 ~ "Additional - New Primary",
+        .$Sample_Type == 6 ~ "Metastatic",
+        .$Sample_Type == 7 ~ "Additional Metastatic",
+        .$Sample_Type == 11 ~ "Solid Tissue Normal"
+    ))
+```
+
+Additionally, the following disease types are included:
+
+```{r}
+mirna_sample_df %>% 
+    group_by(Disease) %>% 
+    tally()
+```
+
+And technical variables:
+
+```{r}
+mirna_sample_df %>% 
+    group_by(Protocol, Platform) %>% 
+    tally()
+```
+
+
+## miRNA expression values
+
+Below is an (admittedly ugly) spot check of the distribution of gene expression values in the miRNA data. I picked 8 genes at random (as this corresponds to the number of colors in a standard discrete palette).
+
+```{r}
+set.seed(0)
+# randomly select 8 genes to plot
+norm_sub_df <- mirna_norm_df %>% 
+    sample_n(8) %>% 
+    gather("sample", "expression", -Genes, -Correction)
+```
+
+
+```{r}
+norm_sub_df %>% 
+    left_join(mirna_sample_df, by = c("sample" = "id")) %>% 
+    ggplot(aes(x = Disease, y = log2(expression + 1))) +
+    geom_violin(aes(fill = Genes), alpha = 0.2, 
+                position = "identity", scale = "width") +
+    coord_flip()
+```
+
+
 ```{r}
 # convert expression df to matrix
 mirna_norm_mat <- mirna_norm_df %>% 
     select(one_of(c("Genes", mirna_sample_df$id))) %>% 
     column_to_rownames("Genes") %>% 
     as.matrix()
-mirna_norm_mat[1:5, 1:5]
 ```
 
-```{r}
-mirna_norm_mat %>% 
-    rowMeans() %>% 
-    tibble(avg_abundance = .) %>% 
-    ggplot(aes(x = avg_abundance + 1)) +
-    geom_histogram(bins = 50) +
-    scale_x_log10()
-```
+
+
+
 

@@ -111,9 +111,45 @@ mirna_norm_df <- read_csv(mirna_norm_file, progress = FALSE)
 ```
 
 ```{r}
-mirna_norm_df %>% 
-    group_by(Correction) %>% 
-    tally()
+tcga_colors <- tribble(
+    ~Color, ~Disease,
+    "#ED2891", "BRCA",
+    "#B2509E", "GBM",
+    "#D49DC7", "LGG",
+    "#C1A72F", "ACC",
+    "#E8C51D", "PCPG",
+    "#F9ED32", "THCA",
+    "#CACCDB", "CHOL",
+    "#9EDDF9", "COAD",
+    "#007EB5", "ESCA",
+    "#104A7F", "LIHC",
+    "#6E7BA2", "PAAD",
+    "#DAF1FC", "READ",
+    "#00AEEF", "STAD",
+    "#F6B667", "CESC",
+    "#D97D25", "OV",
+    "#F89420", "UCEC",
+    "#FBE3C7", "UCS",
+    "#009444", "HNSC",
+    "#97D1A9", "UVM",
+    "#754C29", "LAML",
+    "#CEAC8F", "THYM",
+    "#3953A4", "DLBC",
+    "#BBD642", "SKCM",
+    "#00A99D", "SARC",
+    "#542C88", "LUAD",
+    "#A084BD", "LUSC",
+    "#D3C3E0", "MESO",
+    "#FAD2D9", "BLCA",
+    "#EA7075", "KICH",
+    "#ED1C24", "KIRC",
+    "#F8AFB3", "KIRP",
+    "#7E1918", "PRAD",
+    "#BE1E2D", "TGCT"
+)
+
+mirna_sample_df <- mirna_sample_df %>% 
+    mutate(Disease = factor(Disease, levels = tcga_colors$Disease))
 ```
 
 -----
@@ -132,6 +168,8 @@ mirna_sample_df %>%
     tally()
 ```
 
+\  
+
 Based on the codes, this is the distribution of sample types:
 
 ```{r}
@@ -149,6 +187,8 @@ mirna_sample_df %>%
     ))
 ```
 
+\  
+
 Additionally, the following disease types are included:
 
 ```{r}
@@ -156,6 +196,8 @@ mirna_sample_df %>%
     group_by(Disease) %>% 
     tally()
 ```
+
+\  
 
 And technical variables:
 
@@ -165,39 +207,120 @@ mirna_sample_df %>%
     tally()
 ```
 
+\  
 
 ## miRNA expression values
 
-Below is an (admittedly ugly) spot check of the distribution of gene expression values in the miRNA data. I picked 8 genes at random (as this corresponds to the number of colors in a standard discrete palette).
+Expression values in the data are reportedly reads per million (RPM). I've randomly selected a few samples from each disease type, sample type, protocol, and platform to inspect the distribution of expression values across all `r nrow(mirna_norm_df)` miRNA genes.
 
 ```{r}
 set.seed(0)
-# randomly select 8 genes to plot
+
+# randomly select 1-3 samples from each combination of characteristics
+sample_sub_df <- mirna_sample_df %>% 
+    group_by(Disease, Sample_Type, Protocol, Platform) %>% 
+    sample_n(3, replace = TRUE) %>% 
+    ungroup() %>% 
+    distinct()
+
+# subset and melt the expression data
 norm_sub_df <- mirna_norm_df %>% 
-    sample_n(8) %>% 
-    gather("sample", "expression", -Genes, -Correction)
+    select(one_of(c("Genes", sample_sub_df$id))) %>%
+    gather("sample", "expression", -Genes)
 ```
 
+\  
+
+Even with a shifted log (`log10(x + 1)`) transformation, expression values look to be more exponentially distributed than normal.
 
 ```{r}
 norm_sub_df %>% 
     left_join(mirna_sample_df, by = c("sample" = "id")) %>% 
-    ggplot(aes(x = Disease, y = log2(expression + 1))) +
-    geom_violin(aes(fill = Genes), alpha = 0.2, 
-                position = "identity", scale = "width") +
-    coord_flip()
+    ggplot(aes(x = log10(expression + 1))) +
+    stat_density(aes(group = sample), geom = "line", position = "identity", 
+                 alpha = 0.2)
+```
+
+\  
+
+I can also look at the distribution of log-RPM values with boxplots:
+
+```{r}
+norm_sub_df %>% 
+    left_join(mirna_sample_df, by = c("sample" = "id")) %>% 
+    ggplot(aes(x = sample, y = log10(expression + 1))) +
+    geom_boxplot(alpha = 0.5, outlier.size = 0.5) +
+    theme(axis.text.x = element_blank())
 ```
 
 
-```{r}
+```{r, warning=FALSE}
 # convert expression df to matrix
 mirna_norm_mat <- mirna_norm_df %>% 
     select(one_of(c("Genes", mirna_sample_df$id))) %>% 
     column_to_rownames("Genes") %>% 
     as.matrix()
 ```
+\  
 
+## PCA
 
+I used the `prcomp()` function on the transposed expression matrix (samples x genes, after transposing) to compute PCA data, which I can use to look for batch effects among samples.
+
+```{r}
+mirna_norm_pca <- mirna_norm_mat %>% 
+    t() %>% 
+    prcomp()
+```
+
+(I can use the `broom:tidy()` function to convert data in the `prcomp` object into data frames for `ggplot`.)
+
+```{r, warning=FALSE}
+pc_df <- mirna_norm_pca %>% 
+    tidy("pcs")
+
+mirna_norm_pca_df <- mirna_norm_pca %>% 
+    tidy("samples") %>% 
+    filter(PC <= 2) %>% 
+    left_join(mirna_sample_df, by = c("row" = "id"))
+```
+
+The plot below shows samples plotted as points along the first two principle components (PCs). Points are colored by disease type.
+
+```{r}
+pc1_label <- pc_df %>% 
+    filter(PC == 1) %>% 
+    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+    flatten_chr()
+
+pc2_label <- pc_df %>% 
+    filter(PC == 2) %>% 
+    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+    flatten_chr()
+
+mirna_norm_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(aes(colour = Disease)) +
+    xlab(pc1_label) +
+    ylab(pc2_label) +
+    scale_color_manual(values = tcga_colors$Color)
+```
+
+\  
+
+Facetting by sample type...
+
+```{r}
+mirna_norm_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(aes(colour = Disease)) +
+    xlab(pc1_label) +
+    ylab(pc2_label) +
+    scale_color_manual(values = tcga_colors$Color) +
+    facet_wrap(~ Sample_Type, scales = "free_y")
+```
 
 
 

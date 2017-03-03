@@ -187,6 +187,8 @@ mirna_sample_df %>%
     ))
 ```
 
+Note: only include "primary" tumor samples for now
+
 \  
 
 Additionally, the following disease types are included:
@@ -196,6 +198,8 @@ mirna_sample_df %>%
     group_by(Disease) %>% 
     tally()
 ```
+
+Note: exclude LAML, THCA, and DLBC from cell content correlations
 
 \  
 
@@ -321,6 +325,126 @@ mirna_norm_pca_df %>%
     scale_color_manual(values = tcga_colors$Color) +
     facet_wrap(~ Sample_Type, scales = "free_y")
 ```
+
+-----
+
+\  
+
+# Prepare correlate data
+
++ Overall Leukocyte fraction  
++ Individual Relative CIBERSORT fraction  
++ Mutation Load  
++ TCR,BCR Diversity  
++ Gene Expression
+
+## Leukocyte fraction
+
+Cellular Content: syn7994728
+syn5808205 ("TCGA_all_leuk_estimate.masked.20170107.tsv")
+
+```{r}
+# file_data <- synGet("syn5808205", downloadLocation = "./")
+```
+
+## CIBERSORT fraction
+
+Cellular Content: syn7994728
+syn8024565 ("TCGA.cluster-by-CIBERSORT-relative.tsv")
+
+## Mutation load
+
+Mutation Load: syn5706827
+syn5706827 ("mutation-load")
+
+## TCR/BCR diversity
+
+## Gene expression
+
++ Expression of  
+    + IFNG,IFN-gamma  
+    + PRF1,Perforin  
+    + GZMA,Granzyme A  
+    + PDCD1,PD-1  
+    + CD274,PD-L1  
+    + PDCD1LG2,PD-L2  
+    + IL10,IL-10  
+    + TGFB1,TGF-beta  
+    + IDO1,IDO  
+    + HLA-A  
+
+Batch effects normalized mRNA data: syn4976363
+syn4976369 ("EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.tsv")
+syn4976366 (" EB++GeneExpAnnotation.tsv")
+
+```{r}
+mrna_synfolder <- "syn4976363"
+mrna_synfiles <- synapseQuery(
+    sprintf('select * from file where parentId=="%s"', mrna_synfolder)
+)
+
+# download files and store data/paths in new data frame
+mrna_files <- mrna_synfiles %>% 
+    mutate(file_data = map(file.id, function(synid) {
+        synGet(synid, downloadLocation = "data/")
+    }),
+    file_path = map_chr(file_data, getFileLocation))
+```
+
+Sample characteristics are stored in a tab-delimited text file (Synapse ID: `syn4976366`) and can be loaded with `read_tsv()`.
+
+```{r}
+# load sample data
+mrna_sample_file <- mrna_files %>% 
+    filter(file.id == "syn4976366") %>% 
+    .[["file_path"]]
+mrna_sample_df <- read_tsv(mrna_sample_file)
+```
+
+Identify matched samples between miRNA and mRNA.
+
+```{r}
+mrna_ids <- mrna_sample_df %>% 
+    select(SampleID) %>%
+    mutate(tumor = str_extract(SampleID, "([:alnum:]+\\-){4}[0-9]+[A-Z]")) %>% 
+    arrange()
+
+mirna_ids <- mirna_sample_df %>%
+    select(id) %>%
+    mutate(tumor = str_extract(id, "([:alnum:]+\\-){4}[0-9]+[A-Z]")) %>% 
+    arrange()
+
+tumor_ids <- inner_join(mirna_ids, mrna_ids, by = "tumor")
+```
+
+mRNA normalized, batch corrected expression values for all samples are stored as a matrix in a TSV file (Synapse ID: `syn4976369`) and can be loaded with `read_tsv()`.
+
+```{r}
+mrna_corr_file <- "data/mrna_correlate_genes.feather"
+if (!file.exists(mrna_corr_file)) {
+    # load normalized, batch-corrected expression data
+    mrna_norm_file <- mrna_files %>% 
+        filter(file.id == "syn4976369") %>% 
+        .[["file_path"]]
+    mrna_norm_df <- read_tsv(mrna_norm_file, progress = FALSE)
+    
+    mrna_genes <- mrna_norm_df %>% 
+        select(gene_id)
+    gene_list <- c("IFNG", "PRF1", "GZMA", "PDCD1", "CD274", "PDCD1LG2", "IL10", 
+                   "TGFB1", "IDO1", "HLA-A")  
+    mrna_corr_df <- mrna_norm_df %>% 
+        separate(gene_id, c("gene_name", "gene_id"), sep = "\\|") %>% 
+        filter(gene_name %in% gene_list) %>% 
+        select(one_of(c("gene_name", "gene_id", tumor_ids$SampleID)))
+    write_feather(mrna_corr_df, mrna_corr_file)
+} else {
+    mrna_corr_df <- read_feather(mrna_corr_file)
+}
+```
+
+
+
+
 
 
 

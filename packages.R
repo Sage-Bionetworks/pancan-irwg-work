@@ -8,6 +8,7 @@ if (!("CURL_CA_BUNDLE" %in% names(Sys.getenv()))) {
 if (!require(synapseClient)) {
     source("http://depot.sagebase.org/CRAN.R")
     pkgInstall("synapseClient")
+    pkgInstall("Rsftp")
 }
 
 # install CRAN and Bioconductor packages
@@ -15,3 +16,4 @@ install.packages("feather")
 install.packages("ggthemes")
 install.packages("ggbeeswarm")
 # BiocInstaller::biocLite(pkg_list, suppressUpdates = T, suppressAutoUpdate = T)
+

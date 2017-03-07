@@ -35,6 +35,9 @@ Exploring associations of miRNA expression levels across tumor types in TCGA wit
 # Synapse client
 library(synapseClient)
 
+# parallel computing
+library(parallel)
+
 # viz packages
 library(ggthemes)
 library(viridis)
@@ -477,53 +480,68 @@ if (!file.exists(mrna_corr_file)) {
 ### Disease-wise correlations
 
 ```{r}
-d_list <- mirna_sample_pt_df %>%
-    distinct(Disease) %>% 
-    mutate(Disease = as.character(Disease)) %>% 
-    .$Disease %>%
-    set_names(.) %>% 
-    as.list()
-
-corr_df_list <- map(d_list, function(d) {
-    print(d)
-    tumors_d <- mirna_sample_pt_df %>%
-        filter(Disease == d) %>%
-        select(tid) %>%
-        flatten_chr() %>%
-        intersect(str_replace(names(mrna_corr_df),
-                              "(\\-[:alnum:]+){2}$", ""))
-    print(length(tumors_d))
-    source_df <- mirna_norm_df %>%
-        set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
-        select(one_of(c("Genes", tumors_d))) %>%
-        dplyr::rename(mirna = Genes) %>%
-        gather(tumor, x, -mirna)
-
-    target_df <- mrna_corr_df %>%
-        set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
-        select(one_of(c("gene_name", tumors_d))) %>%
-        dplyr::rename(mrna = gene_name) %>%
-        gather(tumor, x, -mrna)
-
-    corr_df <- inner_join(source_df, target_df,
-                          by = "tumor",
-                          suffix = c("_source", "_target")) %>%
-        group_by(mirna, mrna) %>%
-        do(tidy(cor.test(.$x_source, .$x_target, method = "spearman")))
-    corr_df[["p.adjust"]] <- p.adjust(corr_df$p.value, method = "BH")
-    return(corr_df)
-})
+mirna_mrna_corr_file <- "data/mirna_mrna_correlation.feather"
+if (!file.exists(mirna_mrna_corr_file)) {
+    
+    d_list <- mirna_sample_pt_df %>%
+        distinct(Disease) %>% 
+        mutate(Disease = as.character(Disease)) %>% 
+        .$Disease %>%
+        set_names(.) %>% 
+        as.list()
+    
+    corr_df_list <- mclapply(d_list, mc.cores = 4, function(d) {
+        print(d)
+        tumors_d <- mirna_sample_pt_df %>%
+            filter(Disease == d) %>%
+            select(tid) %>%
+            flatten_chr() %>%
+            intersect(str_replace(names(mrna_corr_df),
+                                  "(\\-[:alnum:]+){2}$", ""))
+        print(length(tumors_d))
+        source_df <- mirna_norm_df %>%
+            set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
+            select(one_of(c("Genes", tumors_d))) %>%
+            dplyr::rename(mirna = Genes) %>%
+            gather(tumor, x, -mirna) %>% 
+            filter(!is.na(x))
+        
+        target_df <- mrna_corr_df %>%
+            set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
+            select(one_of(c("gene_name", tumors_d))) %>%
+            dplyr::rename(mrna = gene_name) %>%
+            gather(tumor, x, -mrna) %>% 
+            filter(!is.na(x))
+        
+        corr_df <- inner_join(source_df, target_df,
+                              by = "tumor",
+                              suffix = c("_source", "_target")) %>%
+            group_by(mirna, mrna) %>%
+            do(tidy(cor.test(.$x_source, .$x_target, method = "spearman")))
+        corr_df[["p.adjust"]] <- p.adjust(corr_df$p.value, method = "BH")
+        return(corr_df)
+    })
+    
+    mirna_mrna_corr_df <- bind_rows(corr_df_list, .id = "disease")
+    write_feather(mirna_mrna_corr_df, mirna_mrna_corr_file)
+} else {
+    mirna_mrna_corr_df <- read_feather(mirna_mrna_corr_file)
+}
 ```
 
 ```{r}
-corr_df_list[[1]] %>% 
+mirna_mrna_corr_df %>% 
+    filter(disease == "BRCA") %>% 
     group_by(mirna) %>% 
-    filter(any(p.adjust < 0.001)) %>%
+    filter(any(p.adjust < 0.01), any(abs(estimate) > 0.5)) %>%
     ungroup() %>% 
-    ggplot(aes(x = mrna, y = mirna)) +
-    geom_tile(aes(fill = estimate))
-
-sum(corr_df_list[[1]]$estimate == corr_df_list[[2]]$estimate, na.rm = TRUE)
+    left_join(gene_correlate_df, by = c("mrna" = "HGNC Symbol")) %>% 
+    group_by(mirna, `Gene Family`) %>% 
+    summarize(avg_correlation = mean(estimate)) %>% 
+    ggplot(aes(x = `Gene Family`, y = mirna)) +
+    geom_tile(aes(fill = avg_correlation)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+
 
 

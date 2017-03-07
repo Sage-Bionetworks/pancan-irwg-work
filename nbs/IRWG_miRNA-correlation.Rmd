@@ -187,14 +187,20 @@ mirna_sample_df %>%
     ))
 ```
 
-Note: only include "primary" tumor samples for now
+Note: only include "primary" tumor samples for now; also, add additional column to store tumor ID (to ease mapping between data sets).
+
+```{r}
+mirna_sample_pt_df <- mirna_sample_df %>% 
+    filter(Sample_Type %in% c(1, 3, 5)) %>% 
+    mutate(tid = str_replace(id, "(\\-[:alnum:]+){2}$", ""))
+```
 
 \  
 
 Additionally, the following disease types are included:
 
 ```{r}
-mirna_sample_df %>% 
+mirna_sample_pt_df %>% 
     group_by(Disease) %>% 
     tally()
 ```
@@ -206,7 +212,7 @@ Note: exclude LAML, THCA, and DLBC from cell content correlations
 And technical variables:
 
 ```{r}
-mirna_sample_df %>% 
+mirna_sample_pt_df %>% 
     group_by(Protocol, Platform) %>% 
     tally()
 ```
@@ -221,7 +227,7 @@ Expression values in the data are reportedly reads per million (RPM). I've rando
 set.seed(0)
 
 # randomly select 1-3 samples from each combination of characteristics
-sample_sub_df <- mirna_sample_df %>% 
+sample_sub_df <- mirna_sample_pt_df %>% 
     group_by(Disease, Sample_Type, Protocol, Platform) %>% 
     sample_n(3, replace = TRUE) %>% 
     ungroup() %>% 
@@ -239,7 +245,7 @@ Even with a shifted log (`log10(x + 1)`) transformation, expression values look 
 
 ```{r}
 norm_sub_df %>% 
-    left_join(mirna_sample_df, by = c("sample" = "id")) %>% 
+    left_join(mirna_sample_pt_df, by = c("sample" = "id")) %>% 
     ggplot(aes(x = log10(expression + 1))) +
     stat_density(aes(group = sample), geom = "line", position = "identity", 
                  alpha = 0.2)
@@ -251,7 +257,7 @@ I can also look at the distribution of log-RPM values with boxplots:
 
 ```{r}
 norm_sub_df %>% 
-    left_join(mirna_sample_df, by = c("sample" = "id")) %>% 
+    left_join(mirna_sample_pt_df, by = c("sample" = "id")) %>% 
     ggplot(aes(x = sample, y = log10(expression + 1))) +
     geom_boxplot(alpha = 0.5, outlier.size = 0.5) +
     theme(axis.text.x = element_blank())
@@ -261,7 +267,7 @@ norm_sub_df %>%
 ```{r, warning=FALSE}
 # convert expression df to matrix
 mirna_norm_mat <- mirna_norm_df %>% 
-    select(one_of(c("Genes", mirna_sample_df$id))) %>% 
+    select(one_of(c("Genes", mirna_sample_pt_df$id))) %>% 
     column_to_rownames("Genes") %>% 
     as.matrix()
 ```
@@ -286,7 +292,7 @@ pc_df <- mirna_norm_pca %>%
 mirna_norm_pca_df <- mirna_norm_pca %>% 
     tidy("samples") %>% 
     filter(PC <= 2) %>% 
-    left_join(mirna_sample_df, by = c("row" = "id"))
+    left_join(mirna_sample_pt_df, by = c("row" = "id"))
 ```
 
 The plot below shows samples plotted as points along the first two principle components (PCs). Points are colored by disease type.
@@ -323,7 +329,7 @@ mirna_norm_pca_df %>%
     xlab(pc1_label) +
     ylab(pc2_label) +
     scale_color_manual(values = tcga_colors$Color) +
-    facet_wrap(~ Sample_Type, scales = "free_y")
+    facet_wrap(~ Sample_Type)
 ```
 
 -----
@@ -406,18 +412,45 @@ Identify matched samples between miRNA and mRNA.
 ```{r}
 mrna_ids <- mrna_sample_df %>% 
     select(SampleID) %>%
-    mutate(tumor = str_extract(SampleID, "([:alnum:]+\\-){4}[0-9]+[A-Z]")) %>% 
+    mutate(tid = str_replace(SampleID, "(\\-[:alnum:]+){2}$", "")) %>% 
     arrange()
 
-mirna_ids <- mirna_sample_df %>%
-    select(id) %>%
-    mutate(tumor = str_extract(id, "([:alnum:]+\\-){4}[0-9]+[A-Z]")) %>% 
+mirna_ids <- mirna_sample_pt_df %>%
+    select(id, tid) %>%
     arrange()
 
-tumor_ids <- inner_join(mirna_ids, mrna_ids, by = "tumor")
+tumor_ids <- inner_join(mirna_ids, mrna_ids, by = "tid")
 ```
 
 mRNA normalized, batch corrected expression values for all samples are stored as a matrix in a TSV file (Synapse ID: `syn4976369`) and can be loaded with `read_tsv()`.
+
+List of genes accessed [here](https://docs.google.com/spreadsheets/d/1aqOXYsU1ubkbxIZI_5p8ZRootgOAT0KweMA3LvSZ7HY/edit#gid=0) and saved as a TSV at `data/Cancer Immunomodulators - TCGA PanImmune Group - Direct Relationship.tsv`:
+
+```{r}
+gene_correlate_file <- "data/Cancer Immunomodulators - TCGA PanImmune Group - Direct Relationship.tsv"
+gene_correlate_df <- read_tsv(gene_correlate_file)
+```
+
+Check if any genes from the table are missing from expression data...
+
+```{r}
+# check for discrepancies in gene name/ID
+# mrna_norm_genes %>%
+#     filter((gene_id %in% gene_correlate_df$`Entrez ID`) |
+#            (gene_name %in% gene_correlate_df$`HGNC Symbol`)) %>%
+#     left_join(gene_correlate_df %>%
+#                   select(gene_name = `HGNC Symbol`,
+#                          gene_id = `Entrez ID`),
+#               by = "gene_name", suffix = c("_syn", "_cp")) %>%
+#     left_join(gene_correlate_df %>%
+#                   select(gene_name = `HGNC Symbol`,
+#                          gene_id = `Entrez ID`) %>%
+#                   mutate(gene_id = as.character(gene_id)),
+#               by = c("gene_id_syn" =  "gene_id"), 
+#               suffix = c("_syn", "_cp")) %>%
+#     filter((gene_name_syn != gene_name_cp) | (gene_id_syn != gene_id_cp))
+```
+
 
 ```{r}
 mrna_corr_file <- "data/mrna_correlate_genes.feather"
@@ -428,13 +461,12 @@ if (!file.exists(mrna_corr_file)) {
         .[["file_path"]]
     mrna_norm_df <- read_tsv(mrna_norm_file, progress = FALSE)
     
-    mrna_genes <- mrna_norm_df %>% 
-        select(gene_id)
-    gene_list <- c("IFNG", "PRF1", "GZMA", "PDCD1", "CD274", "PDCD1LG2", "IL10", 
-                   "TGFB1", "IDO1", "HLA-A")  
+    # gene_list <- c("IFNG", "PRF1", "GZMA", "PDCD1", "CD274", "PDCD1LG2", "IL10", 
+    #                "TGFB1", "IDO1", "HLA-A")  
     mrna_corr_df <- mrna_norm_df %>% 
         separate(gene_id, c("gene_name", "gene_id"), sep = "\\|") %>% 
-        filter(gene_name %in% gene_list) %>% 
+        filter((gene_id %in% gene_correlate_df$`Entrez ID`) 
+               | (gene_name %in% gene_correlate_df$`HGNC Symbol`)) %>% 
         select(one_of(c("gene_name", "gene_id", tumor_ids$SampleID)))
     write_feather(mrna_corr_df, mrna_corr_file)
 } else {
@@ -442,9 +474,56 @@ if (!file.exists(mrna_corr_file)) {
 }
 ```
 
+### Disease-wise correlations
 
+```{r}
+d_list <- mirna_sample_pt_df %>%
+    distinct(Disease) %>% 
+    mutate(Disease = as.character(Disease)) %>% 
+    .$Disease %>%
+    set_names(.) %>% 
+    as.list()
 
+corr_df_list <- map(d_list, function(d) {
+    print(d)
+    tumors_d <- mirna_sample_pt_df %>%
+        filter(Disease == d) %>%
+        select(tid) %>%
+        flatten_chr() %>%
+        intersect(str_replace(names(mrna_corr_df),
+                              "(\\-[:alnum:]+){2}$", ""))
+    print(length(tumors_d))
+    source_df <- mirna_norm_df %>%
+        set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
+        select(one_of(c("Genes", tumors_d))) %>%
+        dplyr::rename(mirna = Genes) %>%
+        gather(tumor, x, -mirna)
 
+    target_df <- mrna_corr_df %>%
+        set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
+        select(one_of(c("gene_name", tumors_d))) %>%
+        dplyr::rename(mrna = gene_name) %>%
+        gather(tumor, x, -mrna)
 
+    corr_df <- inner_join(source_df, target_df,
+                          by = "tumor",
+                          suffix = c("_source", "_target")) %>%
+        group_by(mirna, mrna) %>%
+        do(tidy(cor.test(.$x_source, .$x_target, method = "spearman")))
+    corr_df[["p.adjust"]] <- p.adjust(corr_df$p.value, method = "BH")
+    return(corr_df)
+})
+```
+
+```{r}
+corr_df_list[[1]] %>% 
+    group_by(mirna) %>% 
+    filter(any(p.adjust < 0.001)) %>%
+    ungroup() %>% 
+    ggplot(aes(x = mrna, y = mirna)) +
+    geom_tile(aes(fill = estimate))
+
+sum(corr_df_list[[1]]$estimate == corr_df_list[[2]]$estimate, na.rm = TRUE)
+```
 
 

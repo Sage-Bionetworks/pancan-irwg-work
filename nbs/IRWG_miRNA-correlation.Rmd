@@ -354,17 +354,31 @@ syn5808205 ("TCGA_all_leuk_estimate.masked.20170107.tsv")
 
 ```{r}
 # file_data <- synGet("syn5808205", downloadLocation = "./")
+leuk_frac_file <- "data/TCGA_all_leuk_estimate.masked.20170107.tsv"
+leuk_frac_df <- read_tsv(leuk_frac_file, col_names = FALSE) %>% 
+    set_names(c("disease", "id", "leuk_frac"))
 ```
 
 ## CIBERSORT fraction
 
-Cellular Content: syn7994728
+Cellular Content: syn4991611
 syn8024565 ("TCGA.cluster-by-CIBERSORT-relative.tsv")
+
+```{r}
+ciber_frac_file <- "data/TCGA.cluster-by-CIBERSORT-relative.tsv"
+ciber_frac_df <- read_tsv(ciber_frac_file)
+```
 
 ## Mutation load
 
 Mutation Load: syn5706827
 syn5706827 ("mutation-load")
+
+```{r}
+mut_load_file <- "data/mutation-load-vial.txt"
+mut_load_df <- read_tsv(mut_load_file)
+```
+
 
 ## TCR/BCR diversity
 
@@ -432,26 +446,6 @@ List of genes accessed [here](https://docs.google.com/spreadsheets/d/1aqOXYsU1ub
 ```{r}
 gene_correlate_file <- "data/Cancer Immunomodulators - TCGA PanImmune Group - Direct Relationship.tsv"
 gene_correlate_df <- read_tsv(gene_correlate_file)
-```
-
-Check if any genes from the table are missing from expression data...
-
-```{r}
-# check for discrepancies in gene name/ID
-# mrna_norm_genes %>%
-#     filter((gene_id %in% gene_correlate_df$`Entrez ID`) |
-#            (gene_name %in% gene_correlate_df$`HGNC Symbol`)) %>%
-#     left_join(gene_correlate_df %>%
-#                   select(gene_name = `HGNC Symbol`,
-#                          gene_id = `Entrez ID`),
-#               by = "gene_name", suffix = c("_syn", "_cp")) %>%
-#     left_join(gene_correlate_df %>%
-#                   select(gene_name = `HGNC Symbol`,
-#                          gene_id = `Entrez ID`) %>%
-#                   mutate(gene_id = as.character(gene_id)),
-#               by = c("gene_id_syn" =  "gene_id"), 
-#               suffix = c("_syn", "_cp")) %>%
-#     filter((gene_name_syn != gene_name_cp) | (gene_id_syn != gene_id_cp))
 ```
 
 

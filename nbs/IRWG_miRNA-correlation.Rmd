@@ -190,12 +190,12 @@ mirna_sample_df %>%
     ))
 ```
 
-Note: only include "primary" tumor samples for now; also, add additional column to store tumor ID (to ease mapping between data sets).
+Note: only include "primary" tumor samples for now; also, add additional column to store vial ID (to ease mapping between data sets).
 
 ```{r}
 mirna_sample_pt_df <- mirna_sample_df %>% 
     filter(Sample_Type %in% c(1, 3, 5)) %>% 
-    mutate(tid = str_replace(id, "(\\-[:alnum:]+){2}$", ""))
+    mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", ""))
 ```
 
 \  
@@ -429,14 +429,19 @@ Identify matched samples between miRNA and mRNA.
 ```{r}
 mrna_ids <- mrna_sample_df %>% 
     select(SampleID) %>%
-    mutate(tid = str_replace(SampleID, "(\\-[:alnum:]+){2}$", "")) %>% 
+    mutate(vial_id = str_replace(SampleID, "(\\-[:alnum:]+){3}$", "")) %>% 
     arrange()
 
 mirna_ids <- mirna_sample_pt_df %>%
-    select(id, tid) %>%
+    select(id, vial_id) %>%
     arrange()
 
-tumor_ids <- inner_join(mirna_ids, mrna_ids, by = "tid")
+mirna_mrna_shared_ids <- inner_join(mirna_ids, mrna_ids, by = "vial_id")
+
+# only keep samples with matched vial AND portion
+mirna_mrna_shared_ids <- mirna_mrna_shared_ids %>% 
+    filter(str_extract(id, "([:alnum:]+\\-){4}[0-9]+") 
+           == str_extract(SampleID, "([:alnum:]+\\-){4}[0-9]+"))
 ```
 
 mRNA normalized, batch corrected expression values for all samples are stored as a matrix in a TSV file (Synapse ID: `syn4976369`) and can be loaded with `read_tsv()`.
@@ -451,7 +456,8 @@ gene_correlate_df <- read_tsv(gene_correlate_file)
 
 ```{r}
 mrna_corr_file <- "data/mrna_correlate_genes.feather"
-if (!file.exists(mrna_corr_file)) {
+force_read <- TRUE
+if (!file.exists(mrna_corr_file) | force_read) {
     # load normalized, batch-corrected expression data
     mrna_norm_file <- mrna_files %>% 
         filter(file.id == "syn4976369") %>% 
@@ -464,7 +470,8 @@ if (!file.exists(mrna_corr_file)) {
         separate(gene_id, c("gene_name", "gene_id"), sep = "\\|") %>% 
         filter((gene_id %in% gene_correlate_df$`Entrez ID`) 
                | (gene_name %in% gene_correlate_df$`HGNC Symbol`)) %>% 
-        select(one_of(c("gene_name", "gene_id", tumor_ids$SampleID)))
+        select(one_of(c("gene_name", "gene_id", 
+                        mirna_mrna_shared_ids$SampleID)))
     write_feather(mrna_corr_df, mrna_corr_file)
 } else {
     mrna_corr_df <- read_feather(mrna_corr_file)
@@ -475,7 +482,8 @@ if (!file.exists(mrna_corr_file)) {
 
 ```{r}
 mirna_mrna_corr_file <- "data/mirna_mrna_correlation.feather"
-if (!file.exists(mirna_mrna_corr_file)) {
+force_compute <- TRUE
+if (!file.exists(mirna_mrna_corr_file) | force_compute) {
     
     d_list <- mirna_sample_pt_df %>%
         distinct(Disease) %>% 
@@ -486,29 +494,29 @@ if (!file.exists(mirna_mrna_corr_file)) {
     
     corr_df_list <- mclapply(d_list, mc.cores = 4, function(d) {
         print(d)
-        tumors_d <- mirna_sample_pt_df %>%
+        samples_d <- mirna_sample_pt_df %>%
             filter(Disease == d) %>%
-            select(tid) %>%
+            select(vial_id) %>%
             flatten_chr() %>%
             intersect(str_replace(names(mrna_corr_df),
-                                  "(\\-[:alnum:]+){2}$", ""))
-        print(length(tumors_d))
+                                  "(\\-[:alnum:]+){3}$", ""))
+        print(length(samples_d))
         source_df <- mirna_norm_df %>%
-            set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
-            select(one_of(c("Genes", tumors_d))) %>%
+            set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
+            select(one_of(c("Genes", samples_d))) %>%
             dplyr::rename(mirna = Genes) %>%
-            gather(tumor, x, -mirna) %>% 
+            gather(sample, x, -mirna) %>% 
             filter(!is.na(x))
         
         target_df <- mrna_corr_df %>%
-            set_names(str_replace(names(.), "(\\-[:alnum:]+){2}$", "")) %>%
-            select(one_of(c("gene_name", tumors_d))) %>%
+            set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
+            select(one_of(c("gene_name", samples_d))) %>%
             dplyr::rename(mrna = gene_name) %>%
-            gather(tumor, x, -mrna) %>% 
+            gather(sample, x, -mrna) %>% 
             filter(!is.na(x))
         
         corr_df <- inner_join(source_df, target_df,
-                              by = "tumor",
+                              by = "sample",
                               suffix = c("_source", "_target")) %>%
             group_by(mirna, mrna) %>%
             do(tidy(cor.test(.$x_source, .$x_target, method = "spearman")))
@@ -525,16 +533,16 @@ if (!file.exists(mirna_mrna_corr_file)) {
 
 ```{r}
 mirna_mrna_corr_df %>% 
-    filter(disease == "BRCA") %>% 
-    group_by(mirna) %>% 
-    filter(any(p.adjust < 0.01), any(abs(estimate) > 0.5)) %>%
-    ungroup() %>% 
-    left_join(gene_correlate_df, by = c("mrna" = "HGNC Symbol")) %>% 
-    group_by(mirna, `Gene Family`) %>% 
-    summarize(avg_correlation = mean(estimate)) %>% 
-    ggplot(aes(x = `Gene Family`, y = mirna)) +
-    geom_tile(aes(fill = avg_correlation)) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    # filter(disease == "BRCA") %>% 
+    # group_by(mirna) %>% 
+    filter(p.adjust < 0.01, abs(estimate) > 0.5) %>%
+    select(mirna) %>% 
+    n_distinct()
+    # ungroup() %>% 
+    # left_join(gene_correlate_df, by = c("mrna" = "HGNC Symbol")) %>% 
+    # ggplot(aes(x = mrna, y = mirna)) +
+    # geom_tile(aes(fill = estimate)) +
+    # theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
 

@@ -449,12 +449,13 @@ NOTE: several samples were assayed on multiple plates; average the leukocyte fra
 
 ```{r}
 leuk_frac_corr_file <- "../data/leuk_frac_correlate_data.feather"
-force_format <- FALSE
+force_format <- TRUE
 if (!file.exists(leuk_frac_corr_file) | force_format) {
     leuk_frac_corr_df <- mirna_leuk_frac_shared_ids %>% 
         left_join(leuk_frac_df, by = c("id_leuk_frac" = "id")) %>% 
         group_by(disease, vial_id) %>% 
-        summarise(leuk_frac = mean(leuk_frac))
+        summarise(leuk_frac = mean(leuk_frac)) %>% 
+        ungroup()
     
     write_feather(leuk_frac_corr_df, leuk_frac_corr_file)
 } else {
@@ -469,7 +470,7 @@ mirna_leuk_frac_corr_file <- "../data/mirna_leuk_frac_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_leuk_frac_corr_file) | force_compute) {
     
-    # skip immune cell cancers
+    # skip immune cell cancers?
     d_list <- mirna_sample_pt_df %>% 
         # filter((!Disease %in% c("LAML", "THYM", "DLBC"))) %>% 
         filter(Disease %in% leuk_frac_corr_df$disease) %>% 
@@ -558,6 +559,7 @@ ciber_frac_ids <- ciber_frac_df %>%
 mirna_ciber_frac_shared_ids <- inner_join(mirna_ids, ciber_frac_ids,
                                          by = "vial_id",
                                          suffix = c("_mirna", "_ciber_frac")) %>% 
+    distinct() %>% 
     filter((str_extract(id_mirna, portion_id_minus_analyte_regex) 
             == str_extract(id_ciber_frac, portion_id_minus_analyte_regex)))
 ```
@@ -568,14 +570,15 @@ NOTE: several samples were assayed on multiple plates; average the CIBERSORT fra
 
 ```{r}
 ciber_frac_corr_file <- "../data/ciber_frac_correlate_data.feather"
-force_format <- FALSE
+force_format <- TRUE
 if (!file.exists(ciber_frac_corr_file) | force_format) {
     ciber_frac_corr_df <- mirna_ciber_frac_shared_ids %>%
         left_join(ciber_frac_df, by = c("id_ciber_frac" = "id")) %>% 
         select(-id_mirna, -id_ciber_frac, 
                -SampleID, -P.value, -Correlation, -RMSE) %>% 
         group_by(CancerType, vial_id) %>%
-        summarise_each(funs(mean))
+        summarise_each(funs(mean)) %>% 
+        ungroup()
     
     write_feather(ciber_frac_corr_df, ciber_frac_corr_file)
 } else {
@@ -590,10 +593,10 @@ mirna_ciber_frac_corr_file <- "../data/mirna_ciber_frac_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_ciber_frac_corr_file) | force_compute) {
     
-    # skip immune cell cancers
+    # skip immune cell cancers?
     d_list <- mirna_sample_pt_df %>%
-        filter((!Disease %in% c("LAML", "THCA", "DLBC")),
-               Disease %in% ciber_frac_corr_df$CancerType) %>% 
+        # filter((!Disease %in% c("LAML", "THYM", "DLBC"))) %>% 
+        filter(Disease %in% ciber_frac_corr_df$CancerType) %>% 
         distinct(Disease) %>% 
         mutate(Disease = as.character(Disease)) %>% 
         .$Disease %>%
@@ -680,7 +683,7 @@ mirna_mut_load_shared_ids <- inner_join(mirna_ids, mut_load_ids,
 
 ```{r}
 mut_load_corr_file <- "../data/mut_load_correlate_data.feather"
-force_format <- FALSE
+force_format <- TRUE
 if (!file.exists(mut_load_corr_file) | force_format) {
     mut_load_corr_df <- mirna_mut_load_shared_ids %>% 
         left_join(mut_load_df, by = c("id_mut_load" = "Tumor_Sample_ID_Vial"))
@@ -698,8 +701,9 @@ mirna_mut_load_corr_file <- "../data/mirna_mut_load_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_mut_load_corr_file) | force_compute) {
     
-    # skip immune cell cancers
+    # skip immune cell cancers?
     d_list <- mirna_sample_pt_df %>%
+        # filter((!Disease %in% c("LAML", "THYM", "DLBC"))) %>%
         filter(Disease %in% mut_load_corr_df$cohort) %>% 
         distinct(Disease) %>% 
         mutate(Disease = as.character(Disease)) %>% 
@@ -781,34 +785,99 @@ tcr_div_ids <- tcr_div_df %>%
 mirna_tcr_div_shared_ids <- inner_join(mirna_ids, tcr_div_ids,
                                        by = "vial_id",
                                        suffix = c("_mirna", "_tcr_div")) %>% 
+    distinct() %>% 
     filter((str_extract(id_mirna, portion_id_minus_analyte_regex) 
-            == str_extract(id_tcr_div, portion_id_minus_analyte_regex))) %>% 
-    filter((duplicated(vial_id) | duplicated(vial_id, fromLast = TRUE)))
+            == str_extract(id_tcr_div, portion_id_minus_analyte_regex)))
+```
+
+```{r}
+mirna_tcr_div_shared_ids %>% 
+    filter(duplicated(id_tcr_div) | duplicated(id_tcr_div, fromLast = TRUE))
 ```
 
 NOTE: several samples were assayed on multiple plates; average the TCR diversity across these before computing correlations with miRNA
 
 ### Correlate data formatting
 
+Some samples (`AliquotBarcode`) have 2 values for Shannon entropy, apparently corresponding to separate analyses on CGHub. I'll go ahead and average these values per aliquot, prior to averaging Shannon values per vial ID. As a small measure of QC, I'll also only keep observations with at least 1 TCRA read or 1 TCRB read.
+
 ```{r}
-# tcr_div_corr_file <- "../data/tcr_div_correlate_data.feather"
-# force_format <- FALSE
-# if (!file.exists(tcr_div_corr_file) | force_format) {
-#     # tcr_div_corr_df <- 
-#         
-# mirna_tcr_div_shared_ids %>%
-#         left_join(tcr_div_df, by = c("id_tcr_div" = "AliquotBarcode")) %>% 
-#         # group_by(Study, vial_id) %>% 
-#         # summarise(shannon = mean(shannon)) %>% 
-#         # group_by(CancerType, vial_id) %>%
-#         # summarise_each(funs(mean)) %>% 
-#         I
-#     
-#     write_feather(tcr_div_corr_df, tcr_div_corr_file)
-# } else {
-#     tcr_div_corr_df <- read_feather(tcr_div_corr_file)
-# }
+tcr_div_corr_file <- "../data/tcr_div_correlate_data.feather"
+force_format <- TRUE
+if (!file.exists(tcr_div_corr_file) | force_format) {
+    tcr_div_corr_df <- mirna_tcr_div_shared_ids %>%
+        left_join(tcr_div_df, by = c("id_tcr_div" = "AliquotBarcode")) %>%
+        select(-CGHub_analysis_id) %>% 
+        distinct() %>% 
+        filter(totTCRa_reads > 0 | totTCRb_reads > 0) %>%
+        group_by(Study, vial_id, id_tcr_div) %>%
+        summarize(shannon = mean(shannon)) %>%
+        group_by(Study, vial_id) %>%
+        summarise(shannon = mean(shannon)) %>% 
+        ungroup()
+
+    write_feather(tcr_div_corr_df, tcr_div_corr_file)
+} else {
+    tcr_div_corr_df <- read_feather(tcr_div_corr_file)
+}
 ```
+
+### Disease-wise correlations
+
+```{r warning=FALSE}
+mirna_tcr_div_corr_file <- "../data/mirna_tcr_div_correlation.feather"
+force_compute <- TRUE
+if (!file.exists(mirna_tcr_div_corr_file) | force_compute) {
+    
+    # skip immune cell cancers
+    d_list <- mirna_sample_pt_df %>%
+        # filter((!Disease %in% c("LAML", "THYM", "DLBC"))) %>% 
+        filter(Disease %in% tcr_div_corr_df$Study) %>% 
+        distinct(Disease) %>% 
+        mutate(Disease = as.character(Disease)) %>% 
+        .$Disease %>%
+        set_names(.) %>% 
+        as.list()
+    
+    corr_df_list <- mclapply(d_list, mc.cores = 4, function(d) {
+        samples_d <- mirna_sample_pt_df %>%
+            filter(Disease == d) %>%
+            select(vial_id) %>%
+            flatten_chr() %>%
+            intersect(tcr_div_corr_df$vial_id)
+
+        source_df <- mirna_norm_df %>%
+            set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
+            select(one_of(c("Genes", samples_d))) %>%
+            dplyr::rename(mirna = Genes) %>%
+            gather(sample, x, -mirna) %>% 
+            filter(!is.na(x))
+
+        target_df <- tcr_div_corr_df %>%
+            filter(vial_id %in% samples_d) %>% 
+            select(-Study) %>% 
+            dplyr::rename(sample = vial_id) %>% 
+            gather(correlate, x, -sample)
+        
+        corr_df <- inner_join(source_df, target_df,
+                              by = "sample",
+                              suffix = c("_source", "_target")) %>%
+            group_by(mirna, correlate) %>%
+            do(tidy(cor.test(.$x_source, .$x_target, method = "spearman"))) %>% 
+            ungroup()
+        corr_df[["p.adjust"]] <- p.adjust(corr_df$p.value, method = "BH")
+        return(corr_df)
+    })
+    
+    mirna_tcr_div_corr_df <- bind_rows(corr_df_list, .id = "disease") %>% 
+        mutate(correlate_type = "TCR diversity")
+    write_feather(mirna_tcr_div_corr_df, mirna_tcr_div_corr_file)
+} else {
+    mirna_tcr_div_corr_df <- read_feather(mirna_tcr_div_corr_file)
+}
+```
+
+\  
 
 ## Gene expression
 
@@ -925,7 +994,7 @@ if (!file.exists(mrna_corr_file) | force_format) {
 
 ```{r message=FALSE, warning=FALSE}
 mirna_mrna_corr_file <- "../data/mirna_mrna_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(mirna_mrna_corr_file) | force_compute) {
     
     d_list <- mirna_sample_pt_df %>%
@@ -975,7 +1044,11 @@ if (!file.exists(mirna_mrna_corr_file) | force_compute) {
 }
 ```
 
-### Correlation viz
+-----
+
+\  
+
+# Summarize results
 
 ```{r}
 # mirna_mrna_corr_df %>% 

@@ -272,7 +272,7 @@ mirna_sample_pt_df %>%
 
 ## miRNA expression values
 
-Expression values in the data are reportedly reads per million (RPM). I've randomly selected a few samples from each disease type, sample type, protocol, and platform to inspect the distribution of expression values across all `r nrow(mirna_norm_df)` miRNA genes.
+Expression values in the data are reportedly reads per million (RPM). I've randomly selected a few samples from each disease type, sample type, protocol, and platform to inspect the distribution of expression values across all `r nrow(mirna_corr_df)` miRNA genes.
 
 ```{r}
 set.seed(0)
@@ -310,8 +310,9 @@ I can also look at the distribution of log-RPM values with boxplots:
 mirna_sub_df %>% 
     left_join(mirna_sample_pt_df, by = c("sample" = "id")) %>% 
     ggplot(aes(x = sample, y = log10(expression + 1))) +
-    geom_boxplot(alpha = 0.5, outlier.size = 0.5) +
-    theme(axis.text.x = element_blank())
+    geom_boxplot(aes(fill = Disease), outlier.size = 0.5) +
+    theme(axis.text.x = element_blank()) +
+    scale_fill_manual(values = tcga_colors$Color)
 ```
 
 
@@ -448,7 +449,7 @@ NOTE: several samples were assayed on multiple plates; average the leukocyte fra
 ### Correlate data formatting
 
 ```{r}
-leuk_frac_corr_file <- "../data/leuk_frac_correlate_data.feather"
+leuk_frac_corr_file <- "../data/leuk_frac_correlates_for_mirna.feather"
 force_format <- TRUE
 if (!file.exists(leuk_frac_corr_file) | force_format) {
     leuk_frac_corr_df <- mirna_leuk_frac_shared_ids %>% 
@@ -466,7 +467,7 @@ if (!file.exists(leuk_frac_corr_file) | force_format) {
 ### Disease-wise correlations
 
 ```{r warning=FALSE}
-mirna_leuk_frac_corr_file <- "../data/mirna_leuk_frac_correlation.feather"
+mirna_leuk_frac_corr_file <- "../results/mirna_leuk_frac_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_leuk_frac_corr_file) | force_compute) {
     
@@ -569,7 +570,7 @@ NOTE: several samples were assayed on multiple plates; average the CIBERSORT fra
 ### Correlate data formatting
 
 ```{r}
-ciber_frac_corr_file <- "../data/ciber_frac_correlate_data.feather"
+ciber_frac_corr_file <- "../data/ciber_frac_correlates_for_mirna.feather"
 force_format <- TRUE
 if (!file.exists(ciber_frac_corr_file) | force_format) {
     ciber_frac_corr_df <- mirna_ciber_frac_shared_ids %>%
@@ -589,7 +590,7 @@ if (!file.exists(ciber_frac_corr_file) | force_format) {
 ### Disease-wise correlations
 
 ```{r warning=FALSE}
-mirna_ciber_frac_corr_file <- "../data/mirna_ciber_frac_correlation.feather"
+mirna_ciber_frac_corr_file <- "../results/mirna_ciber_frac_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_ciber_frac_corr_file) | force_compute) {
     
@@ -610,7 +611,7 @@ if (!file.exists(mirna_ciber_frac_corr_file) | force_compute) {
             flatten_chr() %>%
             intersect(ciber_frac_corr_df$vial_id)
 
-        source_df <- mirna_norm_df %>%
+        source_df <- mirna_corr_df %>%
             set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
             select(one_of(c("Genes", samples_d))) %>%
             dplyr::rename(mirna = Genes) %>%
@@ -619,10 +620,7 @@ if (!file.exists(mirna_ciber_frac_corr_file) | force_compute) {
 
         target_df <- ciber_frac_corr_df %>%
             filter(vial_id %in% samples_d) %>% 
-            select(-id_mirna, -id_ciber_frac, -CIBSERSORT.relative.CLUSTER,
-                   -CancerType, -P.value, -Correlation,
-                   -RMSE, -PatID, -samptype, -OS_Time, -OS_Status, 
-                   -TotalLeukocyte, -gdTcells) %>% 
+            select(-CancerType) %>% 
             gather(correlate, x, -vial_id) %>% 
             dplyr::rename(sample = vial_id)
         
@@ -682,7 +680,7 @@ mirna_mut_load_shared_ids <- inner_join(mirna_ids, mut_load_ids,
 ### Correlate data formatting
 
 ```{r}
-mut_load_corr_file <- "../data/mut_load_correlate_data.feather"
+mut_load_corr_file <- "../data/mut_load_correlates_for_mirna.feather"
 force_format <- TRUE
 if (!file.exists(mut_load_corr_file) | force_format) {
     mut_load_corr_df <- mirna_mut_load_shared_ids %>% 
@@ -697,7 +695,7 @@ if (!file.exists(mut_load_corr_file) | force_format) {
 ### Disease-wise correlations
 
 ```{r warning=FALSE}
-mirna_mut_load_corr_file <- "../data/mirna_mut_load_correlation.feather"
+mirna_mut_load_corr_file <- "../results/mirna_mut_load_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_mut_load_corr_file) | force_compute) {
     
@@ -718,7 +716,7 @@ if (!file.exists(mirna_mut_load_corr_file) | force_compute) {
             flatten_chr() %>%
             intersect(mut_load_corr_df$vial_id)
 
-        source_df <- mirna_norm_df %>%
+        source_df <- mirna_corr_df %>%
             set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
             select(one_of(c("Genes", samples_d))) %>%
             dplyr::rename(mirna = Genes) %>%
@@ -790,11 +788,6 @@ mirna_tcr_div_shared_ids <- inner_join(mirna_ids, tcr_div_ids,
             == str_extract(id_tcr_div, portion_id_minus_analyte_regex)))
 ```
 
-```{r}
-mirna_tcr_div_shared_ids %>% 
-    filter(duplicated(id_tcr_div) | duplicated(id_tcr_div, fromLast = TRUE))
-```
-
 NOTE: several samples were assayed on multiple plates; average the TCR diversity across these before computing correlations with miRNA
 
 ### Correlate data formatting
@@ -802,7 +795,7 @@ NOTE: several samples were assayed on multiple plates; average the TCR diversity
 Some samples (`AliquotBarcode`) have 2 values for Shannon entropy, apparently corresponding to separate analyses on CGHub. I'll go ahead and average these values per aliquot, prior to averaging Shannon values per vial ID. As a small measure of QC, I'll also only keep observations with at least 1 TCRA read or 1 TCRB read.
 
 ```{r}
-tcr_div_corr_file <- "../data/tcr_div_correlate_data.feather"
+tcr_div_corr_file <- "../data/tcr_div_correlates_for_mirna.feather"
 force_format <- TRUE
 if (!file.exists(tcr_div_corr_file) | force_format) {
     tcr_div_corr_df <- mirna_tcr_div_shared_ids %>%
@@ -825,7 +818,7 @@ if (!file.exists(tcr_div_corr_file) | force_format) {
 ### Disease-wise correlations
 
 ```{r warning=FALSE}
-mirna_tcr_div_corr_file <- "../data/mirna_tcr_div_correlation.feather"
+mirna_tcr_div_corr_file <- "../results/mirna_tcr_div_correlation.feather"
 force_compute <- TRUE
 if (!file.exists(mirna_tcr_div_corr_file) | force_compute) {
     
@@ -846,7 +839,7 @@ if (!file.exists(mirna_tcr_div_corr_file) | force_compute) {
             flatten_chr() %>%
             intersect(tcr_div_corr_df$vial_id)
 
-        source_df <- mirna_norm_df %>%
+        source_df <- mirna_corr_df %>%
             set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
             select(one_of(c("Genes", samples_d))) %>%
             dplyr::rename(mirna = Genes) %>%
@@ -967,7 +960,7 @@ gene_correlate_df <- read_tsv(gene_correlate_file)
 
 
 ```{r}
-mrna_corr_file <- "../data/mrna_correlate_genes.feather"
+mrna_corr_file <- "../data/mrna_correlates_for_mirna.feather"
 force_format <- FALSE
 if (!file.exists(mrna_corr_file) | force_format) {
     # load normalized, batch-corrected expression data
@@ -993,7 +986,7 @@ if (!file.exists(mrna_corr_file) | force_format) {
 ### Disease-wise correlations
 
 ```{r message=FALSE, warning=FALSE}
-mirna_mrna_corr_file <- "../data/mirna_mrna_correlation.feather"
+mirna_mrna_corr_file <- "../results/mirna_mrna_correlation.feather"
 force_compute <- FALSE
 if (!file.exists(mirna_mrna_corr_file) | force_compute) {
     
@@ -1012,7 +1005,7 @@ if (!file.exists(mirna_mrna_corr_file) | force_compute) {
             intersect(str_replace(names(mrna_corr_df),
                                   "(\\-[:alnum:]+){3}$", ""))
 
-        source_df <- mirna_norm_df %>%
+        source_df <- mirna_corr_df %>%
             set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
             select(one_of(c("Genes", samples_d))) %>%
             dplyr::rename(mirna = Genes) %>%

@@ -270,7 +270,7 @@ if (!dir.exists("../results")) {
     dir.create("../results")
 }
 clonality_leuk_frac_corr_file <- "../results/clonality_leuk_frac_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(clonality_leuk_frac_corr_file) | force_compute) {
     # skip immune cell cancers?
     d_list <- clonality_corr_df %>% 
@@ -373,7 +373,7 @@ NOTE: several samples were assayed on multiple plates; average the CIBERSORT fra
 
 ```{r}
 ciber_frac_corr_file <- "../data/ciber_frac_correlates_for_clonality.feather"
-force_format <- TRUE
+force_format <- FALSE
 if (!file.exists(ciber_frac_corr_file) | force_format) {
     ciber_frac_corr_df <- clonality_ciber_frac_shared_ids %>%
         left_join(ciber_frac_df, by = c("id_ciber_frac" = "id")) %>% 
@@ -393,7 +393,7 @@ if (!file.exists(ciber_frac_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 clonality_ciber_frac_corr_file <- "../results/clonality_ciber_frac_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(clonality_ciber_frac_corr_file) | force_compute) {
     # skip immune cell cancers?
     d_list <- clonality_corr_df %>% 
@@ -482,7 +482,7 @@ clonality_mut_load_shared_ids <- inner_join(
 
 ```{r}
 mut_load_corr_file <- "../data/mut_load_correlates_for_clonality.feather"
-force_format <- TRUE
+force_format <- FALSE
 if (!file.exists(mut_load_corr_file) | force_format) {
     mut_load_corr_df <- clonality_mut_load_shared_ids %>% 
         left_join(mut_load_df, by = c("id_mut_load" = "Tumor_Sample_ID_Vial"))
@@ -497,7 +497,7 @@ if (!file.exists(mut_load_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 clonality_mut_load_corr_file <- "../results/clonality_mut_load_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(clonality_mut_load_corr_file) | force_compute) {
     # skip immune cell cancers?
     d_list <- clonality_corr_df %>% 
@@ -596,7 +596,7 @@ Some samples (`AliquotBarcode`) have 2 values for Shannon entropy, apparently co
 
 ```{r}
 tcr_div_corr_file <- "../data/tcr_div_correlates_for_clonality.feather"
-force_format <- TRUE
+force_format <- FALSE
 if (!file.exists(tcr_div_corr_file) | force_format) {
     tcr_div_corr_df <- clonality_tcr_div_shared_ids %>%
         left_join(tcr_div_df, by = c("id_tcr_div" = "AliquotBarcode")) %>%
@@ -619,7 +619,7 @@ if (!file.exists(tcr_div_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 clonality_tcr_div_corr_file <- "../results/clonality_tcr_div_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(clonality_tcr_div_corr_file) | force_compute) {
     # skip immune cell cancers?
     d_list <- clonality_corr_df %>% 
@@ -781,7 +781,7 @@ if (!file.exists(mrna_corr_file) | force_format) {
 
 ```{r message=FALSE, warning=FALSE}
 clonality_mrna_corr_file <- "../results/clonality_mrna_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(clonality_mrna_corr_file) | force_compute) {
     # skip immune cell cancers?
     d_list <- clonality_corr_df %>% 
@@ -836,19 +836,83 @@ if (!file.exists(clonality_mrna_corr_file) | force_compute) {
 
 # Summarize results
 
-```{r}
-# mirna_mrna_corr_df %>% 
-#     # filter(disease == "BRCA") %>% 
-#     # group_by(mirna) %>% 
-#     filter(p.adjust < 0.01, abs(estimate) > 0.5) %>%
-#     select(mirna) %>% 
-#     n_distinct()
-#     # ungroup() %>% 
-#     # left_join(gene_correlate_df, by = c("mrna" = "HGNC Symbol")) %>% 
-#     # ggplot(aes(x = mrna, y = mirna)) +
-#     # geom_tile(aes(fill = estimate)) +
-#     # theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```{r, fig.width=5, fig.height=3}
+bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
+          clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
+          clonality_mrna_corr_df) %>%
+    group_by(disease, correlate_type) %>% 
+    summarise(num_correlations = length(estimate),
+              significant = sum(p.adjust < 0.05, na.rm = TRUE),
+              other = num_correlations - significant) %>% 
+    gather(correlations, total, -disease, -correlate_type, -num_correlations) %>% 
+    ggplot(aes(x = disease, y = total)) +
+    geom_col(aes(fill = disease, alpha = correlations), colour = "slategray") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          axis.text.y = element_text(angle = 45),
+          legend.position = "top") +
+    scale_fill_manual(values = tcga_colors$Color) +
+    scale_alpha_manual(values = c(0.4, 1)) +
+    guides(fill = FALSE) +
+    facet_wrap(~ correlate_type, ncol = 2, scales = "free_y")
 ```
 
+```{r}
+clonality_sig_corr_df <- bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
+          clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
+          clonality_mrna_corr_df) %>%
+    filter(p.adjust < 0.05) %>% 
+    mutate(disease = factor(disease, levels = tcga_colors$Disease))
+```
 
+```{r, fig.width=5, fig.height=3}
+clonality_sig_corr_df %>% 
+    mutate(direction = ifelse(estimate > 0, "positive", "negative")) %>%
+    group_by(disease, correlate_type, direction) %>% 
+    tally() %>% 
+    ungroup() %>% 
+    mutate(count = ifelse(direction == "negative", -1 * n, n)) %>% 
+    ggplot(aes(x = disease, y = count)) +
+    geom_col(aes(fill = disease, alpha = direction), colour = "slategray") +
+    # geom_violin(aes(fill = disease)) +
+    # geom_quasirandom(aes(fill = disease, colour = disease), size = 0.5,
+    #                  alpha = 0.3, shape = 21) +
+    # ylab("miRNA-correlate correlation estimate (spearman)") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "top") +
+    scale_fill_manual(values = tcga_colors$Color) +
+    scale_alpha_manual(values = c(0.4, 1)) +
+    guides(fill = FALSE) +
+    facet_wrap(~ correlate_type, ncol = 2, scales = "free_y")
+```
+
+```{r, fig.width=5, fig.height=3}
+clonality_mrna_corr_df %>% 
+    filter((!disease %in% c("LAML", "THYM", "DLBC"))) %>%
+    filter(!is.na(p.adjust),
+           p.adjust < 0.05) %>%
+    left_join(gene_correlate_df %>% 
+                  mutate(`HGNC Symbol` =  ifelse(Gene == "TNFA",
+                                                 "TNF", `HGNC Symbol`),
+                         `HGNC Symbol` =  ifelse(Gene == "IL12",
+                                                 "IL12A", `HGNC Symbol`),
+                         `HGNC Symbol` =  ifelse(`HGNC Symbol` == "VISTA",
+                                                 "C10orf54", `HGNC Symbol`)),
+                  by = c("correlate" = "HGNC Symbol")) %>% 
+    mutate(correlate = ifelse(is.na(`Immune Checkpoint`) & str_detect(Function, "(MHC|Granzyme)"),
+                              Function, str_c("Checkpoint", `Immune Checkpoint`, "Gene")),
+           correlate = ifelse(is.na(correlate), `Gene Family`, correlate)) %>% 
+    select(disease, clonality, correlate, estimate, statistic, p.value, method, alternative, p.adjust, correlate_type) %>% 
+    bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
+          clonality_mut_load_corr_df, clonality_tcr_div_corr_df, .) %>% 
+    filter((!disease %in% c("LAML", "THYM", "DLBC"))) %>%
+    filter(!is.na(p.adjust),
+           p.adjust < 0.05) %>%
+    mutate(correlate = fct_inorder(correlate)) %>% 
+    group_by(disease, clonality, correlate, correlate_type) %>%
+    summarise(estimate = mean(estimate)) %>%
+    ungroup() %>%
+    ggplot(aes(x = disease, y = correlate)) +
+    geom_tile(aes(fill = estimate)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
 

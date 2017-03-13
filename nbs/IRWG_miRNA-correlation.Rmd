@@ -149,9 +149,10 @@ if (!file.exists(mirna_corr_file) | force_read) {
     mirna_norm_df <- read_csv(mirna_norm_file, progress = FALSE)
     
     mirna_corr_df <- mirna_norm_df %>% 
-        select(-one_of(exclude_samples$aliquot_barcode))
+        select(one_of(c("Genes", mirna_sample_pt_df$id)))
     
     write_feather(mirna_corr_df, mirna_corr_file)
+    rm(mirna_norm_df)
 } else {
     mirna_corr_df <- read_feather(mirna_corr_file)
 }
@@ -345,6 +346,8 @@ mirna_corr_pca_df <- mirna_corr_pca %>%
     tidy("samples") %>% 
     filter(PC <= 2) %>% 
     left_join(mirna_sample_pt_df, by = c("row" = "id"))
+
+rm(mirna_corr_mat)
 ```
 
 The plot below shows samples plotted as points along the first two principle components (PCs). Points are colored by disease type.
@@ -450,7 +453,7 @@ NOTE: several samples were assayed on multiple plates; average the leukocyte fra
 
 ```{r}
 leuk_frac_corr_file <- "../data/leuk_frac_correlates_for_mirna.feather"
-force_format <- TRUE
+force_format <- FALSE
 if (!file.exists(leuk_frac_corr_file) | force_format) {
     leuk_frac_corr_df <- mirna_leuk_frac_shared_ids %>% 
         left_join(leuk_frac_df, by = c("id_leuk_frac" = "id")) %>% 
@@ -468,7 +471,7 @@ if (!file.exists(leuk_frac_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 mirna_leuk_frac_corr_file <- "../results/mirna_leuk_frac_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(mirna_leuk_frac_corr_file) | force_compute) {
     
     # skip immune cell cancers?
@@ -935,10 +938,6 @@ mrna_ids <- mrna_sample_df %>%
     mutate(vial_id = str_replace(SampleID, "(\\-[:alnum:]+){3}$", "")) %>% 
     arrange()
 
-mirna_ids <- mirna_sample_pt_df %>%
-    select(id, vial_id) %>%
-    arrange()
-
 mirna_mrna_shared_ids <- inner_join(mirna_ids, mrna_ids, by = "vial_id")
 
 # only keep samples with matched vial ID AND portion number
@@ -978,6 +977,7 @@ if (!file.exists(mrna_corr_file) | force_format) {
         select(one_of(c("gene_name", "gene_id", 
                         mirna_mrna_shared_ids$SampleID)))
     write_feather(mrna_corr_df, mrna_corr_file)
+    rm(mrna_norm_df)
 } else {
     mrna_corr_df <- read_feather(mrna_corr_file)
 }
@@ -987,7 +987,7 @@ if (!file.exists(mrna_corr_file) | force_format) {
 
 ```{r message=FALSE, warning=FALSE}
 mirna_mrna_corr_file <- "../results/mirna_mrna_correlation.feather"
-force_compute <- FALSE
+force_compute <- TRUE
 if (!file.exists(mirna_mrna_corr_file) | force_compute) {
     
     d_list <- mirna_sample_pt_df %>%
@@ -1043,19 +1043,150 @@ if (!file.exists(mirna_mrna_corr_file) | force_compute) {
 
 # Summarize results
 
-```{r}
-# mirna_mrna_corr_df %>% 
-#     # filter(disease == "BRCA") %>% 
-#     # group_by(mirna) %>% 
-#     filter(p.adjust < 0.01, abs(estimate) > 0.5) %>%
-#     select(mirna) %>% 
-#     n_distinct()
-#     # ungroup() %>% 
-#     # left_join(gene_correlate_df, by = c("mrna" = "HGNC Symbol")) %>% 
-#     # ggplot(aes(x = mrna, y = mirna)) +
-#     # geom_tile(aes(fill = estimate)) +
-#     # theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```{r, fig.width=5, fig.height=3}
+bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df, 
+          mirna_mut_load_corr_df, mirna_tcr_div_corr_df,
+          mirna_mrna_corr_df) %>% 
+    group_by(disease, correlate_type) %>% 
+    summarise(num_correlations = length(estimate),
+              significant = sum(p.adjust < 0.05, na.rm = TRUE),
+              other = num_correlations - significant) %>% 
+    gather(correlations, total, -disease, -correlate_type, -num_correlations) %>% 
+    ggplot(aes(x = disease, y = total)) +
+    geom_col(aes(fill = disease, alpha = correlations), colour = "slategray") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          axis.text.y = element_text(angle = 45),
+          legend.position = "top") +
+    scale_fill_manual(values = tcga_colors$Color) +
+    scale_alpha_manual(values = c(0.4, 1)) +
+    guides(fill = FALSE) +
+    facet_wrap(~ correlate_type, ncol = 2, scales = "free_y")
 ```
 
 
+```{r}
+mirna_sig_corr_df <- bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df, 
+          mirna_mut_load_corr_df, mirna_tcr_div_corr_df,
+          mirna_mrna_corr_df) %>% 
+    filter(p.adjust < 0.05) %>% 
+    mutate(disease = factor(disease, levels = tcga_colors$Disease))
+```
+
+```{r, fig.width=5, fig.height=3}
+mirna_sig_corr_df %>% 
+    ggplot(aes(x = disease, y = estimate)) + 
+    # geom_violin(aes(fill = disease)) +
+    geom_quasirandom(aes(fill = disease, colour = disease), size = 0.5,
+                     alpha = 0.3, shape = 21) +
+    ylab("miRNA-correlate correlation estimate (spearman)") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_fill_manual(values = tcga_colors$Color) +
+    scale_colour_manual(values = tcga_colors$Color) +
+    guides(fill = FALSE, colour = FALSE) +
+    facet_wrap(~ correlate_type, ncol = 2, scales = "free_x")
+```
+
+```{r, fig.width=5, fig.height=3}
+mirna_sig_corr_df %>% 
+    mutate(direction = ifelse(estimate > 0, "positive", "negative")) %>%
+    group_by(disease, correlate_type, direction) %>% 
+    tally() %>% 
+    ungroup() %>% 
+    mutate(count = ifelse(direction == "negative", -1 * n, n)) %>% 
+    ggplot(aes(x = disease, y = count)) +
+    geom_col(aes(fill = disease, alpha = direction), colour = "slategray") +
+    # geom_violin(aes(fill = disease)) +
+    # geom_quasirandom(aes(fill = disease, colour = disease), size = 0.5,
+    #                  alpha = 0.3, shape = 21) +
+    # ylab("miRNA-correlate correlation estimate (spearman)") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "top") +
+    scale_fill_manual(values = tcga_colors$Color) +
+    scale_alpha_manual(values = c(0.4, 1)) +
+    guides(fill = FALSE) +
+    facet_wrap(~ correlate_type, ncol = 2, scales = "free_y")
+```
+
+```{r}
+mirna_all_corr_df <- bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df, 
+          mirna_mut_load_corr_df, mirna_tcr_div_corr_df,
+          mirna_mrna_corr_df) %>% 
+    filter(!is.na(p.adjust)) %>% 
+    group_by(mirna, disease, correlate_type) %>% 
+    mutate(num_sig = sum(p.adjust < 0.05 & abs(estimate) > 0.5)) %>% 
+    group_by(mirna, disease) %>% 
+    filter(sum(num_sig > 0) > 2) %>% 
+    ungroup()
+```
+
+```{r}
+mirna_all_corr_df %>% 
+    group_by(disease) %>% 
+    tally()
+```
+
+```{r, fig.width=5, fig.height=4}
+mirna_all_corr_df %>% 
+    filter(p.adjust < 0.05, abs(estimate) > 0.5) %>% 
+    distinct(mirna)
+    # group_by(mirna) %>% 
+    # filter(n_distinct(disease) > 10) %>% 
+    # ungroup() %>% 
+    # # filter(disease %in% c("ACC", "CESC", "DLBC", "ESCA", "SKCM")) %>%
+    # filter(correlate_type != "mRNA expression") %>%
+    I
+    # ggplot(aes(x = correlate, y = disease)) +
+    # geom_point(aes(colour = disease)) +
+    # # geom_tile(aes(fill = estimate)) +
+    # theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    # scale_colour_manual(values = tcga_colors$Color) +
+    # guides(colour = FALSE) +
+    # facet_wrap(~ mirna, ncol = 3)
+    # facet_grid(mirna ~ correlate_type, space = "free", scales = "free") %>% 
+```
+
+```{r, fig.height=3, fig.width=6}
+mirna_mrna_corr_df %>% 
+    filter((!disease %in% c("LAML", "THYM", "DLBC"))) %>%
+    filter(!is.na(p.adjust),
+           p.adjust < 0.05,
+           abs(estimate) > 0.7) %>%
+    left_join(gene_correlate_df %>% 
+                  mutate(`HGNC Symbol` =  ifelse(Gene == "TNFA",
+                                                 "TNF", `HGNC Symbol`),
+                         `HGNC Symbol` =  ifelse(Gene == "IL12",
+                                                 "IL12A", `HGNC Symbol`),
+                         `HGNC Symbol` =  ifelse(`HGNC Symbol` == "VISTA",
+                                                 "C10orf54", `HGNC Symbol`)),
+                  by = c("correlate" = "HGNC Symbol")) %>% 
+    mutate(correlate = ifelse(is.na(`Immune Checkpoint`) & str_detect(Function, "(MHC|Granzyme)"),
+                              Function, str_c("Checkpoint", `Immune Checkpoint`, "Gene")),
+           correlate = ifelse(is.na(correlate), `Gene Family`, correlate)) %>% 
+    select(disease, mirna, correlate, estimate, statistic, p.value, method, alternative, p.adjust, correlate_type) %>% 
+    bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df, 
+          mirna_mut_load_corr_df, mirna_tcr_div_corr_df, .) %>% 
+    filter((!disease %in% c("LAML", "THYM", "DLBC"))) %>%
+    filter(!is.na(p.adjust),
+           p.adjust < 0.05,
+           abs(estimate) > 0.7) %>%
+    mutate(correlate = fct_inorder(correlate)) %>% 
+    # filter(correlate_type == "mRNA expression") %>%
+    # distinct(correlate) %>%
+    group_by(disease, mirna, correlate, correlate_type) %>%
+    summarise(estimate = mean(estimate)) %>%
+    ungroup() %>% 
+    mutate(direction = ifelse(estimate > 0, "positive", "negative")) %>%
+    group_by(mirna, correlate, direction) %>%
+    summarise(diseases = n_distinct(disease)) %>%
+    group_by(mirna) %>%
+    mutate(nz_diseases = sum(diseases > 0)) %>%
+    ungroup() %>%
+    filter(nz_diseases > 1) %>% 
+    arrange(desc(nz_diseases)) %>%
+    mutate(mirna = fct_inorder(mirna)) %>%
+    I %>%
+    ggplot(aes(y = correlate, x = mirna)) +
+    geom_point(aes(fill = direction, size = diseases), shape = 21,  alpha = 0.8, colour = "black") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
 

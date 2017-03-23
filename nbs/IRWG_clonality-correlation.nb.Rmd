@@ -920,14 +920,18 @@ bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df,
     mutate(disease = factor(disease, levels = tcga_colors$Disease),
            significant = ifelse(p.adjust < 0.05, "*", "")) %>% 
     left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
-    filter(!is.na(group)) %>% 
-    filter(correlate_type != "mRNA expression") %>% 
+    mutate(label = ifelse(correlate_type == "TCR diversity", 
+                          "Shannon entropy", label),
+           group = ifelse(correlate_type == "TCR diversity", 
+                          "TCR Diversity", group)) %>% 
+    filter(!is.na(group)) %>%
+    filter(!(correlate_type %in% c("mRNA expression", "CIBERSORT fraction"))) %>% 
     # filter(str_detect(label, "(activated|resting)")) %>% 
     mutate(group = fct_inorder(group)) %>% 
     ggplot(aes(x = disease, y = label)) +
     geom_tile(aes(fill = estimate), size = 0.2) +
     geom_text(aes(label = significant), colour = "white", vjust = 0.8) +
-    scale_fill_viridis("Subclonal fraction correlation") +
+    scale_fill_viridis("ITH Correlation") +
     ylab("") +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           legend.position = "top",
@@ -1011,33 +1015,6 @@ gplots::heatmap.2(clonality_ciber_frac_corr_mat,
 #        lty = 10, lwd = 8, cex = 0.7)
 ```
 
-```{r}
-# clonality_sig_corr_df %>% 
-bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
-          clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
-          clonality_mrna_corr_df) %>%
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(!is.na(p.adjust)) %>%
-    mutate(disease = factor(disease, levels = tcga_colors$Disease),
-           significant = ifelse(p.adjust < 0.05, "*", "")) %>% 
-    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
-    filter(!is.na(group)) %>% 
-    filter(correlate_type == "mRNA expression") %>% 
-    # filter(str_detect(label, "(activated|resting)")) %>% 
-    mutate(group = fct_inorder(group)) %>% 
-    ggplot(aes(x = disease, y = label)) +
-    geom_tile(aes(fill = estimate), size = 0.2) +
-    geom_text(aes(label = significant), colour = "white", vjust = 0.8) +
-    scale_fill_viridis("Subclonal fraction correlation") +
-    ylab("") +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "top",
-          legend.title = element_text(size = 10),
-          strip.text.x = element_text(face = "bold"),
-          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
-          strip.background = element_blank()) +
-    facet_grid(group ~ ., scales = "free", space = "free")
-```
 
 ```{r}
 clonality_mrna_corr_mat <- clonality_mrna_corr_df %>%

@@ -125,31 +125,31 @@ tcga_colors <- tribble(
     "#C1A72F", "ACC",
     "#E8C51D", "PCPG",
     "#F9ED32", "THCA",
-    "#CACCDB", "CHOL",
+    "#104A7F", "CHOL",
     "#9EDDF9", "COAD",
     "#007EB5", "ESCA",
-    "#104A7F", "LIHC",
+    "#CACCDB", "LIHC",
     "#6E7BA2", "PAAD",
     "#DAF1FC", "READ",
     "#00AEEF", "STAD",
     "#F6B667", "CESC",
     "#D97D25", "OV",
-    "#F89420", "UCEC",
-    "#FBE3C7", "UCS",
-    "#009444", "HNSC",
-    "#97D1A9", "UVM",
+    "#FBE3C7", "UCEC",
+    "#F89420", "UCS",
+    "#97D1A9", "HNSC",
+    "#009444", "UVM",
     "#754C29", "LAML",
     "#CEAC8F", "THYM",
     "#3953A4", "DLBC",
     "#BBD642", "SKCM",
     "#00A99D", "SARC",
-    "#542C88", "LUAD",
+    "#D3C3E0", "LUAD",
     "#A084BD", "LUSC",
-    "#D3C3E0", "MESO",
+    "#542C88", "MESO",
     "#FAD2D9", "BLCA",
-    "#EA7075", "KICH",
-    "#ED1C24", "KIRC",
-    "#F8AFB3", "KIRP",
+    "#ED1C24", "KICH",
+    "#F8AFB3", "KIRC",
+    "#EA7075", "KIRP",
     "#7E1918", "PRAD",
     "#BE1E2D", "TGCT"
 )
@@ -248,8 +248,8 @@ NOTE: several samples were assayed on multiple plates; average the leukocyte fra
 ### Correlate data formatting
 
 ```{r}
-leuk_frac_corr_file <- "../data/leuk_frac_correlates_for_clonality.feather"
-force_format <- TRUE
+leuk_frac_corr_file <- "../data/intermediate/leuk_frac_correlates_for_clonality.feather"
+force_format <- FALSE
 if (!file.exists(leuk_frac_corr_file) | force_format) {
     leuk_frac_corr_df <- clonality_leuk_frac_shared_ids %>% 
         left_join(leuk_frac_df, by = c("id_leuk_frac" = "id")) %>% 
@@ -372,7 +372,7 @@ NOTE: several samples were assayed on multiple plates; average the CIBERSORT fra
 ### Correlate data formatting
 
 ```{r}
-ciber_frac_corr_file <- "../data/ciber_frac_correlates_for_clonality.feather"
+ciber_frac_corr_file <- "../data/intermediate/ciber_frac_correlates_for_clonality.feather"
 force_format <- FALSE
 if (!file.exists(ciber_frac_corr_file) | force_format) {
     ciber_frac_corr_df <- clonality_ciber_frac_shared_ids %>%
@@ -481,7 +481,7 @@ clonality_mut_load_shared_ids <- inner_join(
 ### Correlate data formatting
 
 ```{r}
-mut_load_corr_file <- "../data/mut_load_correlates_for_clonality.feather"
+mut_load_corr_file <- "../data/intermediate/mut_load_correlates_for_clonality.feather"
 force_format <- FALSE
 if (!file.exists(mut_load_corr_file) | force_format) {
     mut_load_corr_df <- clonality_mut_load_shared_ids %>% 
@@ -595,7 +595,7 @@ NOTE: several samples were assayed on multiple plates; average the TCR diversity
 Some samples (`AliquotBarcode`) have 2 values for Shannon entropy, apparently corresponding to separate analyses on CGHub. I'll go ahead and average these values per aliquot, prior to averaging Shannon values per vial ID. As a small measure of QC, I'll also only keep observations with at least 1 TCRA read or 1 TCRB read.
 
 ```{r}
-tcr_div_corr_file <- "../data/tcr_div_correlates_for_clonality.feather"
+tcr_div_corr_file <- "../data/intermediate/tcr_div_correlates_for_clonality.feather"
 force_format <- FALSE
 if (!file.exists(tcr_div_corr_file) | force_format) {
     tcr_div_corr_df <- clonality_tcr_div_shared_ids %>%
@@ -754,7 +754,7 @@ gene_correlate_df <- read_tsv(gene_correlate_file)
 
 
 ```{r}
-mrna_corr_file <- "../data/mrna_correlates_for_clonality.feather"
+mrna_corr_file <- "../data/intermediate/mrna_correlates_for_clonality.feather"
 force_format <- FALSE # loading full expression data is slow; avoid if possible
 if (!file.exists(mrna_corr_file) | force_format) {
     # load normalized, batch-corrected expression data
@@ -836,7 +836,7 @@ if (!file.exists(clonality_mrna_corr_file) | force_compute) {
 
 # Summarize results
 
-```{r, fig.width=5, fig.height=3}
+```{r}
 bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
           clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
           clonality_mrna_corr_df) %>%
@@ -857,17 +857,42 @@ bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df,
 ```
 
 ```{r}
+correlate_annotations <- clonality_mrna_corr_df %>% 
+    select(disease, clonality, correlate, estimate, statistic, p.value, method, alternative, p.adjust, correlate_type) %>% 
+    bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
+          clonality_mut_load_corr_df, .) %>% 
+    distinct(correlate, correlate_type) %>% 
+    left_join(gene_correlate_df,
+              by = c("correlate" = "matched_name")) %>%  
+    mutate(label = ifelse(correlate_type == "mRNA expression", 
+                          `HGNC Symbol`, correlate),
+           label = str_replace(correlate, "\\.\\.Tregs\\.", ""),
+           label = ifelse(label == "leuk_frac", "Leukocyte Fraction", label),
+           group = ifelse(correlate_type == "leukocyte fraction", "Total Immune Cells", group),
+           group = ifelse(correlate_type == "mutation load", "Mutation Load", group),
+           group = ifelse(correlate_type == "CIBERSORT fraction" & str_detect(label, "^(T|B)\\."), 
+                          "Adaptive Immune Cells", group),
+           group = ifelse(correlate_type == "CIBERSORT fraction" & !str_detect(label, "^(T|B)"), 
+                          "Innate Immune Cells", group)) %>% 
+    select(correlate, correlate_type, group, label)
+```
+
+
+```{r}
 clonality_sig_corr_df <- bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
           clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
           clonality_mrna_corr_df) %>%
-    filter(p.adjust < 0.05) %>% 
-    mutate(disease = factor(disease, levels = tcga_colors$Disease))
+    filter(!is.na(p.adjust), 
+           p.adjust < 0.05) %>% 
+    mutate(disease = factor(disease, levels = tcga_colors$Disease)) %>% 
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group))
 ```
 
-```{r, fig.width=5, fig.height=3}
+```{r}
 clonality_sig_corr_df %>% 
     mutate(direction = ifelse(estimate > 0, "positive", "negative")) %>%
-    group_by(disease, correlate_type, direction) %>% 
+    group_by(disease, group, direction) %>% 
     tally() %>% 
     ungroup() %>% 
     mutate(count = ifelse(direction == "negative", -1 * n, n)) %>% 
@@ -882,38 +907,205 @@ clonality_sig_corr_df %>%
     scale_fill_manual(values = tcga_colors$Color) +
     scale_alpha_manual(values = c(0.4, 1)) +
     guides(fill = FALSE) +
-    facet_wrap(~ correlate_type, ncol = 2, scales = "free_y")
+    facet_wrap(~ group, ncol = 2, scales = "free_y")
 ```
 
-```{r, fig.width=5, fig.height=3}
-clonality_mrna_corr_df %>% 
-    filter((!disease %in% c("LAML", "THYM", "DLBC"))) %>%
-    filter(!is.na(p.adjust),
-           p.adjust < 0.05) %>%
-    left_join(gene_correlate_df %>% 
-                  mutate(`HGNC Symbol` =  ifelse(Gene == "TNFA",
-                                                 "TNF", `HGNC Symbol`),
-                         `HGNC Symbol` =  ifelse(Gene == "IL12",
-                                                 "IL12A", `HGNC Symbol`),
-                         `HGNC Symbol` =  ifelse(`HGNC Symbol` == "VISTA",
-                                                 "C10orf54", `HGNC Symbol`)),
-                  by = c("correlate" = "HGNC Symbol")) %>% 
-    mutate(correlate = ifelse(is.na(`Immune Checkpoint`) & str_detect(Function, "(MHC|Granzyme)"),
-                              Function, str_c("Checkpoint", `Immune Checkpoint`, "Gene")),
-           correlate = ifelse(is.na(correlate), `Gene Family`, correlate)) %>% 
-    select(disease, clonality, correlate, estimate, statistic, p.value, method, alternative, p.adjust, correlate_type) %>% 
-    bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
-          clonality_mut_load_corr_df, clonality_tcr_div_corr_df, .) %>% 
-    filter((!disease %in% c("LAML", "THYM", "DLBC"))) %>%
-    filter(!is.na(p.adjust),
-           p.adjust < 0.05) %>%
-    mutate(correlate = fct_inorder(correlate)) %>% 
-    group_by(disease, clonality, correlate, correlate_type) %>%
-    summarise(estimate = mean(estimate)) %>%
-    ungroup() %>%
-    ggplot(aes(x = disease, y = correlate)) +
-    geom_tile(aes(fill = estimate)) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```{r}
+# clonality_sig_corr_df %>% 
+bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
+          clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
+          clonality_mrna_corr_df) %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(!is.na(p.adjust)) %>%
+    mutate(disease = factor(disease, levels = tcga_colors$Disease),
+           significant = ifelse(p.adjust < 0.05, "*", "")) %>% 
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group)) %>% 
+    filter(correlate_type != "mRNA expression") %>% 
+    # filter(str_detect(label, "(activated|resting)")) %>% 
+    mutate(group = fct_inorder(group)) %>% 
+    ggplot(aes(x = disease, y = label)) +
+    geom_tile(aes(fill = estimate), size = 0.2) +
+    geom_text(aes(label = significant), colour = "white", vjust = 0.8) +
+    scale_fill_viridis("Subclonal fraction correlation") +
+    ylab("") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "top",
+          legend.title = element_text(size = 10),
+          strip.text.x = element_text(face = "bold"),
+          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
+          strip.background = element_blank()) +
+    facet_grid(group ~ ., scales = "free", space = "free")
+```
+
+```{r}
+clonality_ciber_frac_corr_mat <- clonality_ciber_frac_corr_df %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(!is.na(p.adjust)) %>%
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group)) %>% 
+    select(disease, estimate, label) %>% 
+    spread(disease, estimate) %>% 
+    remove_rownames() %>% 
+    column_to_rownames("label") %>% 
+    as.matrix()
+```
+
+```{r}
+clonality_ciber_frac_padj_mat <- clonality_ciber_frac_corr_df %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(!is.na(p.adjust)) %>%
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group)) %>% 
+    mutate(p_sym = ifelse(p.adjust < 0.05, "*", "")) %>% 
+    select(disease, p_sym, label) %>% 
+    spread(disease, p_sym) %>%
+    remove_rownames() %>%
+    column_to_rownames("label") %>%
+    as.matrix()
+```
+
+```{r, message=FALSE, warning=FALSE}
+lmat <- rbind(c(6, 0, 5), c(0, 0, 2), c(4, 1, 3))
+lwid <- c(1.5, 0.2, 6)
+lhei <- c(2, 0.3, 6)
+
+# col_colors <- tibble(Disease = colnames(clonality_ciber_frac_corr_mat)) %>%
+#     left_join(tcga_colors) %>%
+#     .[["Color"]]
+
+col_colors <- tibble(disease = colnames(clonality_ciber_frac_corr_mat)) %>%
+    left_join(clonality_sig_corr_df %>%
+                  filter(correlate == "leuk_frac")) %>%
+    mutate(Color = ifelse(!is.na(label), "#56B4E9", "#999999"))
+
+row_colors <- tibble(label = rownames(clonality_ciber_frac_corr_mat)) %>%
+    left_join(correlate_annotations, by = "label") %>%
+    mutate(Color = case_when(
+        .$group == "Adaptive Immune Cells" ~ "#333333",
+        .$group == "Innate Immune Cells" ~ "#E69F00"
+    ))
+par(mar = c(0, 0, 0, 0))
+gplots::heatmap.2(clonality_ciber_frac_corr_mat,
+                  trace = "none", density.info = "none",
+                  rowsep = c(8, 15), colsep = c(5, 11),
+                  col = viridis(256),
+                  cellnote = clonality_ciber_frac_padj_mat, notecol = "white",
+                  ColSideColors = col_colors$Color,
+                  RowSideColors = row_colors$Color,
+                  lmat = lmat, lwid = lwid, lhei = lhei, margins = c(4, 12),
+                  key.title = NA, key.xlab = "ITH correlation",
+                  key.par = list(mgp = c(1.5, 0.5, 0),
+                                 mar = c(3, 3, 3, 1)))
+
+# legend(1, 0,
+#        legend = c("Total leukocyte correlation adjusted P < 0.05", 
+#                   "Total leukocyte adjusted P > 0.05"),
+#        col = c("#56B4E9", "#999999"),
+#        horiz = FALSE, xjust = 1, yjust = 0,
+#        lty = 10, lwd = 8, cex = 0.7)
+# legend(0.5, 0,
+#        legend = distinct(row_colors, group, Color)$group,
+#        col = distinct(row_colors, group, Color)$Color,
+#        horiz = FALSE, xjust = 1, yjust = 0,
+#        lty = 10, lwd = 8, cex = 0.7)
+```
+
+```{r}
+# clonality_sig_corr_df %>% 
+bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
+          clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
+          clonality_mrna_corr_df) %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(!is.na(p.adjust)) %>%
+    mutate(disease = factor(disease, levels = tcga_colors$Disease),
+           significant = ifelse(p.adjust < 0.05, "*", "")) %>% 
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group)) %>% 
+    filter(correlate_type == "mRNA expression") %>% 
+    # filter(str_detect(label, "(activated|resting)")) %>% 
+    mutate(group = fct_inorder(group)) %>% 
+    ggplot(aes(x = disease, y = label)) +
+    geom_tile(aes(fill = estimate), size = 0.2) +
+    geom_text(aes(label = significant), colour = "white", vjust = 0.8) +
+    scale_fill_viridis("Subclonal fraction correlation") +
+    ylab("") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "top",
+          legend.title = element_text(size = 10),
+          strip.text.x = element_text(face = "bold"),
+          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
+          strip.background = element_blank()) +
+    facet_grid(group ~ ., scales = "free", space = "free")
+```
+
+```{r}
+clonality_mrna_corr_mat <- clonality_mrna_corr_df %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(!is.na(p.adjust)) %>%
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group)) %>% 
+    select(disease, estimate, label) %>% 
+    spread(disease, estimate) %>% 
+    remove_rownames() %>% 
+    column_to_rownames("label") %>% 
+    as.matrix()
+```
+
+```{r}
+clonality_mrna_padj_mat <- clonality_mrna_corr_df %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(!is.na(p.adjust)) %>%
+    left_join(correlate_annotations, by = c("correlate", "correlate_type")) %>%
+    filter(!is.na(group)) %>% 
+    mutate(p_sym = ifelse(p.adjust < 0.05, "*", "")) %>% 
+    select(disease, p_sym, label) %>% 
+    spread(disease, p_sym) %>%
+    remove_rownames() %>%
+    column_to_rownames("label") %>%
+    as.matrix()
+```
+
+
+
+```{r, message=FALSE, warning=FALSE, fig.width=6, fig.height=8}
+lmat <- rbind(c(5, 0, 4), c(3, 1, 2))
+lwid <- c(1.5, 0.2, 6)
+lhei <- c(1, 7)
+
+# col_colors <- tibble(Disease = colnames(clonality_ciber_frac_corr_mat)) %>%
+#     left_join(tcga_colors) %>%
+#     .[["Color"]]
+
+# scales::show_col(colorblind_pal()(5))
+row_colors <- tibble(label = rownames(clonality_mrna_corr_mat)) %>%
+    left_join(correlate_annotations, by = "label") %>%
+    mutate(Color = case_when(
+        .$group == "Checkpoint Inhibitor" ~ "#333333",
+        .$group == "Checkpoint Stimulator" ~ "#E69F00",
+        .$group == "Cytolytic Marker" ~ "#56B4E9",
+        .$group == "MHC Class I" ~ "#009E73",
+        .$group == "MHC Class II" ~ "#F0E442"
+    ))
+
+gplots::heatmap.2(clonality_mrna_corr_mat,
+                  trace = "none", density.info = "none",
+                  rowsep = c(44, 47, 57, 68, 71), colsep = c(5, 13, 22),
+                  col = viridis(256),
+                  cellnote = clonality_mrna_padj_mat, notecol = "white",
+                  RowSideColors = row_colors$Color,
+                  lmat = lmat, lwid = lwid, lhei = lhei,
+                  margins = c(10, 6), offsetCol = 0.1, offsetRow = 0.1,
+                  key.title = NA, key.xlab = "ITH correlation",
+                  key.par = list(mgp = c(1.5, 0.5, 0),
+                                 mar = c(3, 3, 3, 1)))
+
+par(mar = c(0, 0, 0, 0))
+legend(-0.05, -0.1,
+       legend = distinct(row_colors, group, Color)$group,
+       col = distinct(row_colors, group, Color)$Color,
+       horiz = FALSE, xjust = 0, yjust = 0, ncol = 2,
+       lty = 1, lwd = 7, cex = 0.6, seg.len = 0.8)
 ```
 
 

@@ -139,7 +139,7 @@ mirna_sample_df <- mirna_sample_df %>%
 miRNA normalized, batch corrected expression values for all samples are stored as a matrix in a CSV file (Synapse ID: `syn7201053`) and can be loaded with `read_csv()`.
 
 ```{r warning=FALSE}
-mirna_corr_file <- "../data/mirna_correlate_data.feather"
+mirna_corr_file <- "../data/intermediate/mirna_correlate_data.feather"
 force_read <- FALSE
 if (!file.exists(mirna_corr_file) | force_read) {
     # load normalized, batch-corrected expression data
@@ -171,31 +171,31 @@ tcga_colors <- tribble(
     "#C1A72F", "ACC",
     "#E8C51D", "PCPG",
     "#F9ED32", "THCA",
-    "#CACCDB", "CHOL",
+    "#104A7F", "CHOL",
     "#9EDDF9", "COAD",
     "#007EB5", "ESCA",
-    "#104A7F", "LIHC",
+    "#CACCDB", "LIHC",
     "#6E7BA2", "PAAD",
     "#DAF1FC", "READ",
     "#00AEEF", "STAD",
     "#F6B667", "CESC",
     "#D97D25", "OV",
-    "#F89420", "UCEC",
-    "#FBE3C7", "UCS",
-    "#009444", "HNSC",
-    "#97D1A9", "UVM",
+    "#FBE3C7", "UCEC",
+    "#F89420", "UCS",
+    "#97D1A9", "HNSC",
+    "#009444", "UVM",
     "#754C29", "LAML",
     "#CEAC8F", "THYM",
     "#3953A4", "DLBC",
     "#BBD642", "SKCM",
     "#00A99D", "SARC",
-    "#542C88", "LUAD",
+    "#D3C3E0", "LUAD",
     "#A084BD", "LUSC",
-    "#D3C3E0", "MESO",
+    "#542C88", "MESO",
     "#FAD2D9", "BLCA",
-    "#EA7075", "KICH",
-    "#ED1C24", "KIRC",
-    "#F8AFB3", "KIRP",
+    "#ED1C24", "KICH",
+    "#F8AFB3", "KIRC",
+    "#EA7075", "KIRP",
     "#7E1918", "PRAD",
     "#BE1E2D", "TGCT"
 )
@@ -372,21 +372,6 @@ mirna_corr_pca_df %>%
     scale_color_manual(values = tcga_colors$Color)
 ```
 
-\  
-
-Facetting by sample type...
-
-```{r}
-mirna_corr_pca_df %>% 
-    spread(PC, value) %>% 
-    ggplot(aes(x = `1`, y = `2`)) +
-    geom_point(aes(colour = Disease)) +
-    xlab(pc1_label) +
-    ylab(pc2_label) +
-    scale_color_manual(values = tcga_colors$Color) +
-    facet_wrap(~ Sample_Type)
-```
-
 -----
 
 \  
@@ -452,7 +437,7 @@ NOTE: several samples were assayed on multiple plates; average the leukocyte fra
 ### Correlate data formatting
 
 ```{r}
-leuk_frac_corr_file <- "../data/leuk_frac_correlates_for_mirna.feather"
+leuk_frac_corr_file <- "../data/intermediate/leuk_frac_correlates_for_mirna.feather"
 force_format <- FALSE
 if (!file.exists(leuk_frac_corr_file) | force_format) {
     leuk_frac_corr_df <- mirna_leuk_frac_shared_ids %>% 
@@ -573,8 +558,8 @@ NOTE: several samples were assayed on multiple plates; average the CIBERSORT fra
 ### Correlate data formatting
 
 ```{r}
-ciber_frac_corr_file <- "../data/ciber_frac_correlates_for_mirna.feather"
-force_format <- TRUE
+ciber_frac_corr_file <- "../data/intermediate/ciber_frac_correlates_for_mirna.feather"
+force_format <- FALSE
 if (!file.exists(ciber_frac_corr_file) | force_format) {
     ciber_frac_corr_df <- mirna_ciber_frac_shared_ids %>%
         left_join(ciber_frac_df, by = c("id_ciber_frac" = "id")) %>% 
@@ -594,7 +579,7 @@ if (!file.exists(ciber_frac_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 mirna_ciber_frac_corr_file <- "../results/mirna_ciber_frac_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(mirna_ciber_frac_corr_file) | force_compute) {
     
     # skip immune cell cancers?
@@ -683,8 +668,8 @@ mirna_mut_load_shared_ids <- inner_join(mirna_ids, mut_load_ids,
 ### Correlate data formatting
 
 ```{r}
-mut_load_corr_file <- "../data/mut_load_correlates_for_mirna.feather"
-force_format <- TRUE
+mut_load_corr_file <- "../data/intermediate/mut_load_correlates_for_mirna.feather"
+force_format <- FALSE
 if (!file.exists(mut_load_corr_file) | force_format) {
     mut_load_corr_df <- mirna_mut_load_shared_ids %>% 
         left_join(mut_load_df, by = c("id_mut_load" = "Tumor_Sample_ID_Vial"))
@@ -699,7 +684,7 @@ if (!file.exists(mut_load_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 mirna_mut_load_corr_file <- "../results/mirna_mut_load_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(mirna_mut_load_corr_file) | force_compute) {
     
     # skip immune cell cancers?
@@ -798,8 +783,8 @@ NOTE: several samples were assayed on multiple plates; average the TCR diversity
 Some samples (`AliquotBarcode`) have 2 values for Shannon entropy, apparently corresponding to separate analyses on CGHub. I'll go ahead and average these values per aliquot, prior to averaging Shannon values per vial ID. As a small measure of QC, I'll also only keep observations with at least 1 TCRA read or 1 TCRB read.
 
 ```{r}
-tcr_div_corr_file <- "../data/tcr_div_correlates_for_mirna.feather"
-force_format <- TRUE
+tcr_div_corr_file <- "../data/intermediate/tcr_div_correlates_for_mirna.feather"
+force_format <- FALSE
 if (!file.exists(tcr_div_corr_file) | force_format) {
     tcr_div_corr_df <- mirna_tcr_div_shared_ids %>%
         left_join(tcr_div_df, by = c("id_tcr_div" = "AliquotBarcode")) %>%
@@ -822,7 +807,7 @@ if (!file.exists(tcr_div_corr_file) | force_format) {
 
 ```{r warning=FALSE}
 mirna_tcr_div_corr_file <- "../results/mirna_tcr_div_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(mirna_tcr_div_corr_file) | force_compute) {
     
     # skip immune cell cancers
@@ -959,7 +944,7 @@ gene_correlate_df <- read_tsv(gene_correlate_file)
 
 
 ```{r}
-mrna_corr_file <- "../data/mrna_correlates_for_mirna.feather"
+mrna_corr_file <- "../data/intermediate/mrna_correlates_for_mirna.feather"
 force_format <- FALSE
 if (!file.exists(mrna_corr_file) | force_format) {
     # load normalized, batch-corrected expression data
@@ -987,7 +972,7 @@ if (!file.exists(mrna_corr_file) | force_format) {
 
 ```{r message=FALSE, warning=FALSE}
 mirna_mrna_corr_file <- "../results/mirna_mrna_correlation.feather"
-force_compute <- TRUE
+force_compute <- FALSE
 if (!file.exists(mirna_mrna_corr_file) | force_compute) {
     
     d_list <- mirna_sample_pt_df %>%
@@ -1043,7 +1028,11 @@ if (!file.exists(mirna_mrna_corr_file) | force_compute) {
 
 # Summarize results
 
-```{r, fig.width=5, fig.height=3}
+## Distribution of significant correlations across tumor types
+
+### Aggregate counts by correlate type
+
+```{r}
 bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df, 
           mirna_mut_load_corr_df, mirna_tcr_div_corr_df,
           mirna_mrna_corr_df) %>% 
@@ -1062,6 +1051,8 @@ bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df,
     guides(fill = FALSE) +
     facet_wrap(~ correlate_type, ncol = 2, scales = "free_y")
 ```
+
+### Defining more specific groups within correlate types
 
 ```{r}
 correlate_annotations <- mirna_mrna_corr_df %>% 
@@ -1082,15 +1073,6 @@ correlate_annotations <- mirna_mrna_corr_df %>%
            group = ifelse(correlate_type == "CIBERSORT fraction" & !str_detect(label, "^(T|B)"), 
                           "Innate Immune Cells", group)) %>% 
     select(correlate, correlate_type, group, label)
-```
-
-```{r}
-correlate_annotations %>% 
-    filter(!is.na(group)) %>% 
-    group_by(correlate_type, group) %>% 
-    tally() %>% 
-    ungroup() %>% 
-    summarize(sum(n))
 ```
 
 ```{r}
@@ -1141,6 +1123,7 @@ mirna_sig_corr_df %>%
     arrange(desc(mean_mirna))
 ```
 
+### Groups and correlates with greatest numbers of correlated miRNAs
 
 ```{r, fig.width=10, fig.height=5}
 mirna_sig_corr_df %>% 
@@ -1184,28 +1167,9 @@ mirna_sig_corr_df %>%
     facet_wrap(~ group, scales = "free_y")
 ```
 
-```{r}
-mirna_sig_corr_df %>% 
-    filter(abs(estimate) > 0.5) %>% 
-    group_by(disease, mirna, group) %>%
-    summarise(estimate = mean(estimate)) %>%
-    ungroup() %>% 
-    mutate(direction = ifelse(estimate > 0, "positive", "negative")) %>%
-    group_by(mirna, group, direction) %>%
-    summarise(diseases = n_distinct(disease)) %>%
-    group_by(mirna) %>%
-    mutate(nz_diseases = sum(diseases > 0)) %>%
-    ungroup() %>%
-    filter(nz_diseases > 10) %>% 
-    arrange(desc(nz_diseases)) %>%
-    mutate(mirna = fct_inorder(mirna)) %>%
-    I %>%
-    ggplot(aes(y = group, x = mirna)) +
-    geom_tile(aes(fill = diseases)) +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
-    facet_grid(direction ~ .)
-```
+## Frequently associated miRNAs
 
+### Across all correlate types
 
 ```{r}
 mirna_sig_corr_df %>% 
@@ -1273,14 +1237,164 @@ mirna_sig_corr_df %>%
           strip.background = element_blank()) +
     facet_grid(group ~ mirna, scales = "free", space = "free")
 ```
+### With leukocyte fraction(s) only
+
+```{r}
+mirna_sig_corr_df %>% 
+    filter(abs(estimate) > 0.5) %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(correlate_type == "CIBERSORT fraction") %>%
+    group_by(mirna, disease) %>% 
+    summarize(num_types = n_distinct(label)) %>% 
+    ungroup() %>% 
+    group_by(mirna) %>%
+    mutate(total_types = sum(num_types),
+           avg_types = mean(num_types),
+           nz_disease = n_distinct(disease[num_types > 0])) %>%
+    ungroup() %>%
+    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
+    # filter(total_types >= 25) %>%
+    filter(nz_disease > 3 & avg_types > 1) %>%
+    # I
+    ggplot(aes(x = disease, y = mirna)) +
+    geom_tile(aes(fill = num_types)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+mirna_sig_corr_df %>% 
+    filter(abs(estimate) > 0.5) %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(correlate_type == "CIBERSORT fraction") %>%
+    group_by(mirna, disease) %>% 
+    summarize(num_types = n_distinct(label)) %>% 
+    ungroup() %>% 
+    group_by(mirna) %>%
+    mutate(total_types = sum(num_types),
+           avg_types = mean(num_types),
+           nz_disease = n_distinct(disease[num_types > 0])) %>%
+    ungroup() %>%
+    arrange(desc(nz_disease), desc(avg_types)) %>%
+    filter(nz_disease > 3 & avg_types > 1) %>%
+    # filter(total_types >= 25) %>%
+    distinct(mirna) %>% 
+    .[["mirna"]] -> common_mirnas_leuk
+```
+
+```{r, fig.width=12, fig.height=3.5}
+current_colors <- tcga_colors %>% 
+    filter(Disease %in% filter(mirna_sig_corr_df, abs(estimate) > 0.5,
+                               mirna %in% common_mirnas_leuk)$disease) %>% 
+    filter(!(Disease %in% c("DLBC", "THYM", "LAML")))
+
+mirna_sig_corr_df %>% 
+    filter(abs(estimate) > 0.5) %>%
+    filter(mirna %in% common_mirnas_leuk) %>% 
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(correlate_type != "mRNA expression") %>%
+    mutate(group = fct_inorder(group),
+           mirna = str_extract(mirna, "miR.*"),
+           direction = ifelse(estimate > 0, "positive", "negative"),
+           disease = factor(disease, levels = current_colors$Disease)) %>%
+    ggplot(aes(y = label, x = disease)) +
+    geom_tile(aes(fill = disease, colour = direction), size = 0.4) +
+    scale_fill_manual(values = current_colors$Color) +
+    scale_colour_manual(values = c("black", "#BBBBBB")) +
+    guides(fill = guide_legend(nrow = 3, byrow = TRUE),
+           colour = guide_legend(override.aes = list(fill = "white"),
+                                 reverse = TRUE)) +
+    ylab("") +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          legend.position = "top",
+          strip.text.x = element_text(face = "bold"),
+          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
+          strip.background = element_blank()) +
+    facet_grid(group ~ mirna, scales = "free", space = "free")
+```
+
+### With immunomodulator genes only
+
+```{r}
+mirna_sig_corr_df %>% 
+    filter(abs(estimate) > 0.5) %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(correlate_type == "mRNA expression") %>%
+    group_by(mirna, disease) %>% 
+    summarize(num_types = n_distinct(group)) %>% 
+    ungroup() %>% 
+    group_by(mirna) %>%
+    mutate(total_types = sum(num_types),
+           avg_types = mean(num_types),
+           nz_disease = n_distinct(disease[num_types > 0])) %>%
+    ungroup() %>%
+    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
+    # filter(total_types >= 25) %>%
+    filter(nz_disease > 16 & avg_types > 3.4) %>%
+    # I
+    ggplot(aes(x = disease, y = mirna)) +
+    geom_tile(aes(fill = num_types)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+mirna_sig_corr_df %>% 
+    filter(abs(estimate) > 0.5) %>%
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(correlate_type == "mRNA expression") %>%
+    group_by(mirna, disease) %>% 
+    summarize(num_types = n_distinct(group)) %>% 
+    ungroup() %>% 
+    group_by(mirna) %>%
+    mutate(total_types = sum(num_types),
+           avg_types = mean(num_types),
+           nz_disease = n_distinct(disease[num_types > 0])) %>%
+    ungroup() %>%
+    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
+    filter(nz_disease > 16 & avg_types > 3.4) %>%
+    distinct(mirna) %>% 
+    .[["mirna"]] -> common_mirnas_mrna
+```
+
+
+```{r, fig.width=12, fig.height=8}
+current_colors <- tcga_colors %>% 
+    filter(Disease %in% filter(mirna_sig_corr_df, abs(estimate) > 0.5,
+                               mirna %in% common_mirnas_mrna)$disease) %>% 
+    filter(!(Disease %in% c("DLBC", "THYM", "LAML")))
+
+mirna_sig_corr_df %>% 
+    filter(abs(estimate) > 0.5) %>%
+    filter(mirna %in% common_mirnas_leuk) %>% 
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    filter(correlate_type == "mRNA expression") %>%
+    mutate(group = fct_inorder(group),
+           mirna = str_extract(mirna, "miR.*"),
+           direction = ifelse(estimate > 0, "positive", "negative"),
+           disease = factor(disease, levels = current_colors$Disease)) %>%
+    ggplot(aes(y = label, x = disease)) +
+    geom_tile(aes(fill = disease, colour = direction), size = 0.4) +
+    scale_fill_manual(values = current_colors$Color) +
+    scale_colour_manual(values = c("black", "#BBBBBB")) +
+    guides(fill = guide_legend(nrow = 3, byrow = TRUE),
+           colour = guide_legend(override.aes = list(fill = "white"),
+                                 reverse = TRUE)) +
+    ylab("") +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          legend.position = "top",
+          strip.text.x = element_text(face = "bold"),
+          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
+          strip.background = element_blank()) +
+    facet_grid(group ~ mirna, scales = "free", space = "free")
+```
+
+
+## Overlap with regulator miRs
 
 ```{r}
 mirna_causal_df <- readxl::read_excel("../data/causal_TCGA_panCancer_miRNA_immuneInfiltrate_3_15_2017.xlsx") %>% 
     .[, 1:9]
-```
-
-```{r}
-mirna_causal_df
 ```
 
 ```{r}
@@ -1293,4 +1407,64 @@ mirna_causal_df %>%
     ungroup()
     # knitr::kable()
 ```
+
+## Overlap with known immune miRs
+
+```{r}
+mirna_immune_df <- readxl::read_excel("../data/Paladini_immune_miRNAs.xlsx")
+```
+
+```{r}
+mirna_sig_corr_df %>% 
+    head() %>% 
+    mutate(mirna_short = str_extract(mirna, "(?<=hsa\\-)[:alnum:]+\\-[:alnum:]+")) %>% 
+    select(mirna, mirna_short)
+```
+
+
+```{r}
+mirna_immune_df %>% 
+    mutate(mirna_group = str_split(MicroRNAs, ",")) %>% 
+    unnest(mirna_group) %>% 
+    mutate(mirna_group = str_trim(mirna_group, "both")) %>% 
+    distinct(mirna_group) %>%
+    mutate(mirna = mirna_group) %>% 
+    # filter(Category %in% c("Innate immunity", "Adaptive immunity")) %>% 
+    # filter(str_detect(mirna, "cluster")) %>% 
+    mutate(mirna = str_replace(mirna, "miR-17/92 cluster", "miR-17,miR-18a,miR-19a,miR-20a,miR-19b-1,miR-92a-1"),
+           mirna = str_replace(mirna, "miR-212/132 cluster", "miR-212,miR-132"),
+           mirna = str_replace(mirna, "miR-10 family", "miR-10a,miR-10b,miR-99a,miR-99b,miR-100,miR-125a,miR-125b-1,miR-125b-2")) %>%
+    # left_join(mirna_sig_corr_df %>% 
+    #               filter(correlate_type == "CIBERSORT fraction") %>% 
+    #               mutate(mirna_short = str_extract(
+    #                   mirna, "(?<=hsa\\-)[:alnum:]+\\-[:alnum:]+")
+    #                   ),
+    #           by = c("mirna" = "mirna_short")) %>% 
+    # filter(!is.na(disease)) %>% 
+    # group_by(Cell_lineage, Cellular_process, mirna, group, label) %>% 
+    # tally() %>% 
+    # ungroup() %>%
+    # filter(group == "Adaptive Immune Cells",
+    #        str_detect(Cell_lineage, "^T"),
+    #        str_detect(label, "^T")) %>% 
+    # distinct(Cell_lineage, label) %>% 
+    # mutate(Cell_lineage = str_replace(Cell_lineage, "T ", "T cells "),
+    #        Cell_lineage = str_replace(Cell_lineage, " cells$", ""),
+    #        label = str_replace_all(label, "\\.", " "),
+    #        label = str_replace(label, "CD4", "helper"),
+    #        label = str_replace(label, "CD8", "cytotoxic")) %>%
+    # filter(!(label %in% Cell_lineage) & !(Cell_lineage %in% label)) %>% 
+    # mutate(lineage_match = str_detect(label, Cell_lineage)) %>% 
+    # group_by(Cell_lineage) %>% 
+    # summarize(num_matches = sum(lineage_match)) %>% 
+    I
+```
+
+```{r}
+mirna_sig_corr_df %>% 
+    filter(str_detect(mirna, "miR-92")) %>% 
+    mutate(mirna_short = str_replace(mirna, "(hsa\\-|\\-(3|5)p$)", "")) %>% 
+    select(mirna, mirna_short)
+```
+
 

@@ -672,19 +672,7 @@ if (!file.exists(clonality_tcr_div_corr_file) | force_compute) {
 
 ## Gene expression
 
-+ Expression of  
-    + IFNG,IFN-gamma  
-    + PRF1,Perforin  
-    + GZMA,Granzyme A  
-    + PDCD1,PD-1  
-    + CD274,PD-L1  
-    + PDCD1LG2,PD-L2  
-    + IL10,IL-10  
-    + TGFB1,TGF-beta  
-    + IDO1,IDO  
-    + HLA-A  
-
-### Retrieve/load mRNA data
+### Retrieve/load data
 
 Batch effects normalized mRNA data: syn4976363
 syn4976369 ("EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.tsv")
@@ -830,6 +818,80 @@ if (!file.exists(clonality_mrna_corr_file) | force_compute) {
 }
 ```
 
+\  
+
+## Immune subtypes - MClust
+
+### Retrieve/load data
+
+Sample Subtypes - Workspace_Immune_Subtypes: syn8343491
+syn8464746 ("five_signature_mclust_ensemble_results.tsv")
+
+```{r}
+subtype_mclust_file <- "../data/tcga/five_signature_mclust_ensemble_results.tsv"
+subtype_mclust_df <- read_tsv(subtype_mclust_file)
+```
+
+Note: recommend using `ClusterModel1` column
+
+### Sample filtering
+
+```{r}
+subtype_mclust_df <- subtype_mclust_df %>%
+    mutate(id = str_replace_all(AliquotBarcode, "\\.", "\\-")) %>% 
+    filter(!(id %in% exclude_samples$aliquot_barcode))
+```
+
+### Sample matching
+
+Identify matched samples between miRNA and CIBERSORT fraction.
+
+```{r}
+subtype_mclust_ids <- subtype_mclust_df %>% 
+    select(id) %>%
+    mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", "")) %>% 
+    arrange()
+
+# only keep samples with matched vial ID AND portion number
+clonality_subtype_mclust_shared_ids <- inner_join(
+    clonality_ids, subtype_mclust_ids,
+    by = "vial_id", suffix = c("_clonality", "_subtype_mclust")
+    ) %>% 
+    distinct() %>% 
+    filter((str_extract(id_clonality, portion_id_minus_analyte_regex) 
+            == str_extract(id_subtype_mclust, portion_id_minus_analyte_regex)))
+```
+
+### Correlate data formatting
+
+```{r}
+subtype_mclust_corr_file <- "../data/intermediate/subtype_mclust_correlates_for_clonality.feather"
+force_format <- FALSE
+if (!file.exists(subtype_mclust_corr_file) | force_format) {
+    subtype_mclust_corr_df <- clonality_subtype_mclust_shared_ids %>%
+        left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
+        select(vial_id, ClusterModel1)
+    
+    write_feather(subtype_mclust_corr_df, subtype_mclust_corr_file)
+} else {
+    subtype_mclust_corr_df <- read_feather(subtype_mclust_corr_file)
+}
+```
+
+\  
+
+## Immune subtypes - biclusters
+
+Sample Subtypes - Workspace_Immune_Subtypes: syn8343491
+syn8465598 ("Clusters-Set2-posOnly-RowScorexNumber-Tumors.csv")
+
+```{r}
+subtype_biclust_file <- "../data/tcga/Clusters-Set2-posOnly-RowScorexNumber-Tumors.csv"
+subtype_biclust_df <- read_csv(subtype_biclust_file) %>% 
+    dplyr::rename(id = X1)
+```
+
+
 -----
 
 \  
@@ -853,7 +915,9 @@ cet_path <- "~/Downloads/CETperceptual_csv_0_255/diverging-linear_bjy_30-90_c45_
 my_cet_pal <- get_cet_pal(cet_path)
 ```
 
-## Plots
+## Distribution of significant correlations across tumor types
+
+### Aggregate counts by correlate type
 
 ```{r}
 bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
@@ -908,26 +972,11 @@ clonality_sig_corr_df <- bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_
     filter(!is.na(group))
 ```
 
-```{r}
-clonality_sig_corr_df %>% 
-    mutate(direction = ifelse(estimate > 0, "positive", "negative")) %>%
-    group_by(disease, group, direction) %>% 
-    tally() %>% 
-    ungroup() %>% 
-    mutate(count = ifelse(direction == "negative", -1 * n, n)) %>% 
-    ggplot(aes(x = disease, y = count)) +
-    geom_col(aes(fill = disease, alpha = direction), colour = "slategray") +
-    # geom_violin(aes(fill = disease)) +
-    # geom_quasirandom(aes(fill = disease, colour = disease), size = 0.5,
-    #                  alpha = 0.3, shape = 21) +
-    # ylab("miRNA-correlate correlation estimate (spearman)") +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "top") +
-    scale_fill_manual(values = tcga_colors$Color) +
-    scale_alpha_manual(values = c(0.4, 1)) +
-    guides(fill = FALSE) +
-    facet_wrap(~ group, ncol = 2, scales = "free_y")
-```
+\  
+
+## ITH-immune associations
+
+### With summary observations
 
 ```{r}
 # clonality_sig_corr_df %>% 
@@ -961,6 +1010,8 @@ bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df,
     facet_grid(group ~ ., scales = "free", space = "free")
 ```
 
+### With relative leukocyte fractions
+
 ```{r}
 clonality_ciber_frac_corr_mat <- clonality_ciber_frac_corr_df %>%
     filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
@@ -993,9 +1044,11 @@ lmat <- rbind(c(6, 0, 5), c(0, 0, 2), c(4, 1, 3))
 lwid <- c(1.5, 0.2, 6)
 lhei <- c(2, 0.3, 6)
 
-# col_colors <- tibble(Disease = colnames(clonality_ciber_frac_corr_mat)) %>%
-#     left_join(tcga_colors) %>%
-#     .[["Color"]]
+# PNG graphic device doesn't play well with R Notebooks; copy and paste this
+# chunk to a new R script when ready to save
+
+# png("figures/clonality_leuk_corr.png",
+#     width = 8*300, height = 6*300, res = 300, pointsize = 10)
 
 col_colors <- tibble(disease = colnames(clonality_ciber_frac_corr_mat)) %>%
     left_join(clonality_sig_corr_df %>%
@@ -1013,27 +1066,20 @@ gplots::heatmap.2(clonality_ciber_frac_corr_mat,
                   trace = "none", density.info = "none",
                   rowsep = c(8, 15), colsep = c(5, 11),
                   col = my_cet_pal,
-                  cellnote = clonality_ciber_frac_padj_mat, notecol = "white",
+                  cexRow = 1.3, cexCol = 1.3, notecex = 1.5,
+                  cellnote = clonality_ciber_frac_padj_mat, notecol = "black",
                   ColSideColors = col_colors$Color,
                   RowSideColors = row_colors$Color,
-                  lmat = lmat, lwid = lwid, lhei = lhei, margins = c(4, 12),
+                  lmat = lmat, lwid = lwid, lhei = lhei, 
+                  margins = c(5, 15), offsetCol = 0.1, offsetRow = 0.1,
                   key.title = NA, key.xlab = "ITH correlation",
                   key.par = list(mgp = c(1.5, 0.5, 0),
-                                 mar = c(3, 3, 3, 1)))
+                                 mar = c(3, 3, 3, 1))) # change to c(5, 3, 4, 1) for saving
 
-# legend(1, 0,
-#        legend = c("Total leukocyte correlation adjusted P < 0.05", 
-#                   "Total leukocyte adjusted P > 0.05"),
-#        col = c("#56B4E9", "#999999"),
-#        horiz = FALSE, xjust = 1, yjust = 0,
-#        lty = 10, lwd = 8, cex = 0.7)
-# legend(0.5, 0,
-#        legend = distinct(row_colors, group, Color)$group,
-#        col = distinct(row_colors, group, Color)$Color,
-#        horiz = FALSE, xjust = 1, yjust = 0,
-#        lty = 10, lwd = 8, cex = 0.7)
+# dev.off()
 ```
 
+### With immunomodulators
 
 ```{r}
 clonality_mrna_corr_mat <- clonality_mrna_corr_df %>%
@@ -1062,15 +1108,17 @@ clonality_mrna_padj_mat <- clonality_mrna_corr_df %>%
     as.matrix()
 ```
 
-
-
 ```{r, message=FALSE, warning=FALSE, fig.width=6, fig.height=8}
 lmat <- rbind(c(5, 0, 4), c(3, 1, 2))
 lwid <- c(1.5, 0.2, 6)
 lhei <- c(1, 7)
 
-png("figures/clonality_immunomod_corr.png",
-    width = 8*300, height = 8*300, res = 300, pointsize = 8)
+# PNG graphic device doesn't play well with R Notebooks; copy and paste this
+# chunk to a new R script when ready to save
+
+# png("figures/clonality_immunomod_corr.png",
+#     width = 8*300, height = 10*300, res = 300, pointsize = 10)
+
 row_colors <- tibble(label = rownames(clonality_mrna_corr_mat)) %>%
     left_join(correlate_annotations, by = "label") %>%
     mutate(Color = case_when(
@@ -1085,20 +1133,55 @@ gplots::heatmap.2(clonality_mrna_corr_mat,
                   trace = "none", density.info = "none",
                   rowsep = c(44, 47, 57, 68, 71), colsep = c(5, 13, 22),
                   col = my_cet_pal,
-                  cellnote = clonality_mrna_padj_mat, notecol = "white",
+                  notecex = 1.5, cexRow = 1.2, cexCol = 1.2,
+                  cellnote = clonality_mrna_padj_mat, notecol = "black",
                   RowSideColors = row_colors$Color,
                   lmat = lmat, lwid = lwid, lhei = lhei,
                   margins = c(10, 6), offsetCol = 0.1, offsetRow = 0.1,
                   key.title = NA, key.xlab = "ITH correlation",
                   key.par = list(mgp = c(1.5, 0.5, 0),
-                                 mar = c(3, 3, 3, 1)))
+                                 mar = c(5, 3, 4, 1)))
 
 par(mar = c(0, 0, 0, 0))
-legend(-0.05, -0.1,
+legend(0, -0.025,
        legend = distinct(row_colors, group, Color)$group,
        col = distinct(row_colors, group, Color)$Color,
-       horiz = FALSE, xjust = 0, yjust = 0, ncol = 2,
-       lty = 1, lwd = 7, cex = 0.6, seg.len = 0.8)
+       horiz = FALSE, xjust = 0, yjust = 1, ncol = 2,
+       lty = 1, lwd = 7, cex = 0.8, seg.len = 0.8)
+
+# dev.off()
+```
+
+\  
+
+## ITH and immune subtypes
+
+```{r}
+plot_colors <- tcga_colors %>% 
+    filter(Disease %in% left_join(subtype_mclust_corr_df, 
+                                  clonality_corr_df, 
+                                  by = "vial_id")[["Disease"]])
+
+subtype_mclust_corr_df %>% 
+    left_join(clonality_corr_df, by = "vial_id") %>% 
+    select(Disease, vial_id, ClusterModel1, 
+           subclonal_frac = `Subclonal genome fraction`) %>% 
+    mutate(ClusterModel1 = fct_reorder(as.character(ClusterModel1), 
+                                       ClusterModel1),
+           disease = factor(Disease, levels = plot_colors$Disease)) %>% 
+    group_by(ClusterModel1) %>% 
+    mutate(med_subclonal_frac = median(subclonal_frac)) %>% 
+    ungroup() %>% 
+    # filter(Disease == "BRCA") %>%
+    ggplot(aes(x = ClusterModel1, y = subclonal_frac)) +
+    geom_quasirandom(aes(colour = ClusterModel1), size = 1, alpha = 0.3) +
+    geom_boxplot(aes(fill = ClusterModel1), alpha = 0.3, outlier.size = 0,
+                 outlier.alpha = 0) +
+    scale_fill_manual(values = c("red", "yellow", "green", "cyan", "blue", "magenta")) +
+    scale_colour_manual(values = c("red", "yellow", "green", "cyan", "blue", "magenta")) +
+    guides(fill = FALSE, colour = FALSE) +
+    xlab("Cluster") +
+    ylab("Intratumor Heterogeneity")
 ```
 
 

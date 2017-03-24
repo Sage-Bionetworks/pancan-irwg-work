@@ -836,6 +836,25 @@ if (!file.exists(clonality_mrna_corr_file) | force_compute) {
 
 # Summarize results
 
+## Add color palette
+
+```{r}
+get_cet_pal <- function(cet_path) {
+    read_lines(cet_path) %>%
+        as.list() %>%
+        map_chr(function(c) {
+            c_rgb <- str_split_fixed(string = c, pattern = ",", n = 3)
+            rgb(c_rgb[1], c_rgb[2], c_rgb[3], maxColorValue = 255)
+        })
+}
+
+# here's an example with the diverging blue-to yellow colormap:
+cet_path <- "~/Downloads/CETperceptual_csv_0_255/diverging-linear_bjy_30-90_c45_n256.csv"
+my_cet_pal <- get_cet_pal(cet_path)
+```
+
+## Plots
+
 ```{r}
 bind_rows(clonality_leuk_frac_corr_df, clonality_ciber_frac_corr_df, 
           clonality_mut_load_corr_df, clonality_tcr_div_corr_df,
@@ -993,7 +1012,7 @@ par(mar = c(0, 0, 0, 0))
 gplots::heatmap.2(clonality_ciber_frac_corr_mat,
                   trace = "none", density.info = "none",
                   rowsep = c(8, 15), colsep = c(5, 11),
-                  col = viridis(256),
+                  col = my_cet_pal,
                   cellnote = clonality_ciber_frac_padj_mat, notecol = "white",
                   ColSideColors = col_colors$Color,
                   RowSideColors = row_colors$Color,
@@ -1050,11 +1069,8 @@ lmat <- rbind(c(5, 0, 4), c(3, 1, 2))
 lwid <- c(1.5, 0.2, 6)
 lhei <- c(1, 7)
 
-# col_colors <- tibble(Disease = colnames(clonality_ciber_frac_corr_mat)) %>%
-#     left_join(tcga_colors) %>%
-#     .[["Color"]]
-
-# scales::show_col(colorblind_pal()(5))
+png("figures/clonality_immunomod_corr.png",
+    width = 8*300, height = 8*300, res = 300, pointsize = 8)
 row_colors <- tibble(label = rownames(clonality_mrna_corr_mat)) %>%
     left_join(correlate_annotations, by = "label") %>%
     mutate(Color = case_when(
@@ -1068,7 +1084,7 @@ row_colors <- tibble(label = rownames(clonality_mrna_corr_mat)) %>%
 gplots::heatmap.2(clonality_mrna_corr_mat,
                   trace = "none", density.info = "none",
                   rowsep = c(44, 47, 57, 68, 71), colsep = c(5, 13, 22),
-                  col = viridis(256),
+                  col = my_cet_pal,
                   cellnote = clonality_mrna_padj_mat, notecol = "white",
                   RowSideColors = row_colors$Color,
                   lmat = lmat, lwid = lwid, lhei = lhei,

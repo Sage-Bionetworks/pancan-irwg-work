@@ -1022,6 +1022,66 @@ if (!file.exists(mirna_mrna_corr_file) | force_compute) {
 }
 ```
 
+\  
+
+## Immune subtypes - MClust
+
+### Retrieve/load data
+
+Sample Subtypes - Workspace_Immune_Subtypes: syn8343491
+syn8464746 ("five_signature_mclust_ensemble_results.tsv")
+
+```{r}
+subtype_mclust_file <- "../data/tcga/five_signature_mclust_ensemble_results.tsv"
+subtype_mclust_df <- read_tsv(subtype_mclust_file)
+```
+
+Note: recommend using `ClusterModel1` column
+
+### Sample filtering
+
+```{r}
+subtype_mclust_df <- subtype_mclust_df %>%
+    mutate(id = str_replace_all(AliquotBarcode, "\\.", "\\-")) %>% 
+    filter(!(id %in% exclude_samples$aliquot_barcode))
+```
+
+### Sample matching
+
+Identify matched samples between miRNA and CIBERSORT fraction.
+
+```{r}
+subtype_mclust_ids <- subtype_mclust_df %>% 
+    select(id) %>%
+    mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", "")) %>% 
+    arrange()
+
+# only keep samples with matched vial ID AND portion number
+mirna_subtype_mclust_shared_ids <- inner_join(
+    mirna_ids, subtype_mclust_ids,
+    by = "vial_id", suffix = c("_mirna", "_subtype_mclust")
+    ) %>% 
+    distinct() %>% 
+    filter((str_extract(id_mirna, portion_id_minus_analyte_regex) 
+            == str_extract(id_subtype_mclust, portion_id_minus_analyte_regex)))
+```
+
+### Correlate data formatting
+
+```{r}
+subtype_mclust_corr_file <- "../data/intermediate/subtype_mclust_correlates_for_mirna.feather"
+force_format <- FALSE
+if (!file.exists(subtype_mclust_corr_file) | force_format) {
+    subtype_mclust_corr_df <- mirna_subtype_mclust_shared_ids %>%
+        left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
+        select(vial_id, ClusterModel1)
+    
+    write_feather(subtype_mclust_corr_df, subtype_mclust_corr_file)
+} else {
+    subtype_mclust_corr_df <- read_feather(subtype_mclust_corr_file)
+}
+```
+
 -----
 
 \  
@@ -1288,7 +1348,7 @@ mirna_sig_corr_df %>%
           legend.position = "top")
 ```
 
-## Frequently associated miRNAs
+## Recurring immune-associated miRNAs
 
 ### With leukocyte fraction(s) & causal prediction
 
@@ -1355,7 +1415,7 @@ mirna_immunomod_common_df <- mirna_support_df %>%
     group_by(mirna) %>%
     mutate(nz_disease = n_distinct(disease[num_types > 0])) %>%
     ungroup() %>%
-    distinct(mirna)
+    # distinct(mirna)
     filter(nz_disease > 14)
 ```
 
@@ -1393,8 +1453,8 @@ p <- mirna_support_df %>%
     facet_grid(group ~ mirna, scales = "free", space = "free")
 p
 
-ggsave("../figures/mirna_immunomod_supported_corr.png", p,
-       width = 17, height = 5, units = "cm", dpi = 300, scale = 2)
+# ggsave("../figures/mirna_immunomod_supported_corr.png", p,
+#        width = 17, height = 5, units = "cm", dpi = 300, scale = 2)
 ```
 
 ### All categories...
@@ -1438,7 +1498,151 @@ p <- mirna_support_df %>%
     facet_grid(group ~ mirna_short, scales = "free", space = "free")
 p
 
-ggsave("../figures/mir142_supported_corr.png", p,
-       width = 16, height = 16, units = "cm", dpi = 300, scale = 1.8)
+# ggsave("../figures/mir142_supported_corr.png", p,
+#        width = 16, height = 16, units = "cm", dpi = 300, scale = 1.8)
+```
+
+\  
+
+## All supported miRNA-immunomodulator associations
+
+```{r, fig.width=4, fig.height=8, message=FALSE, warning=FALSE}
+plot_colors <- tcga_colors %>% 
+    filter(Disease %in% filter(mirna_support_df, 
+                               mirbase_support & immune_support)$disease)
+
+p <- mirna_support_df %>%
+    filter(mirbase_support & immune_support) %>% 
+    group_by(label) %>%
+    mutate(num_diseases_gene = n_distinct(disease)) %>%
+    group_by(mirna) %>%
+    mutate(num_diseases_mirna = n_distinct(disease)) %>%
+    ungroup() %>%
+    filter(num_diseases_gene > 10,
+           num_diseases_mirna > 10) %>%
+    mutate(end3p = str_detect(mirna_short, "3p$")) %>% 
+    # filter(mirna_short_ambiguous == "miR-182") %>%
+    mutate(disease = factor(disease, levels = plot_colors$Disease)) %>%
+    ggplot(aes(x = 1, y = mirna_short_ambiguous)) +
+    geom_dotplot(aes(fill = disease, colour = end3p), dotsize = 12,
+                 binaxis = "y", stackgroups = TRUE, positions = "all") +
+    # geom_tile(aes(fill = disease)) +
+    scale_colour_manual(values = c("black", "#CCCCCC")) +
+    scale_fill_manual(values = plot_colors$Color) +
+    xlab("") +
+    ylab("") +
+    guides(colour = FALSE,
+           fill = guide_legend(title = element_blank())) +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          legend.position = "top",
+          strip.text.x = element_text(face = "bold", angle = 0, hjust = 0),
+          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
+          strip.background = element_blank(),
+          panel.spacing.y = unit(1, "points")) +
+    facet_grid(group + label ~ ., scales = "free_y", space = "free_y") %>%
+    I
+p
+# scales::show_col(viridis(8))
+# ggsave("../figures/common_mir_immunomod_corr.png", p,
+#        width = 7.5, height = 12, units = "cm", dpi = 300, scale = 1.8)
+```
+
+```{r}
+mirna_immunomod_common_df %>% 
+    ggplot(aes(x = disease, y = mirna)) +
+    geom_tile(aes(fill = num_types)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+\  
+
+## miRNA and immune subtypes
+
+```{r}
+# subtype_mclust_corr_df 
+mirna_cluster_df <- mirna_corr_df %>% 
+    set_names(str_replace(names(.), "(\\-[:alnum:]+){3}$", "")) %>%
+    select(one_of(c("Genes", mirna_subtype_mclust_shared_ids$vial_id))) %>%
+    dplyr::rename(mirna = Genes) %>%
+    gather(sample, x, -mirna) %>% 
+    filter(!is.na(x)) %>% 
+    left_join(select(mirna_sample_pt_df, Disease, vial_id),
+              by = c("sample" = "vial_id")) %>% 
+    left_join(subtype_mclust_corr_df, by = c("sample" = "vial_id")) %>% 
+    arrange(ClusterModel1, Disease)
+```
+
+```{r}
+head(mirna_cluster_df)
+```
+
+```{r}
+mirna_cluster_df %>% 
+    group_by(mirna, Disease, ClusterModel1) %>% 
+    summarize(avg_expression = mean(x)) %>% 
+    ggplot(aes(x = Disease, y = mirna)) +
+    geom_tile(aes(fill = log10(avg_expression + 1))) +
+    facet_grid(~ ClusterModel1, scales = "free_x", space = "free_x")
+```
+
+
+```{r}
+mirna_cluster_mat <- mirna_cluster_df %>%
+    filter(!(Disease %in% c("DLBC", "THYM", "LAML"))) %>%
+    select(mirna, sample, x) %>% 
+    mutate(sample = fct_inorder(sample)) %>% 
+    spread(sample, x) %>% 
+    remove_rownames() %>% 
+    column_to_rownames("mirna") %>% 
+    as.matrix()
+```
+
+```{r}
+mirna_cluster_mat[1:5, 1:5]
+```
+
+
+```{r, message=FALSE, warning=FALSE, fig.width=6, fig.height=8}
+lmat <- rbind(c(5, 0, 4), c(3, 1, 2))
+lwid <- c(1.5, 0.2, 6)
+lhei <- c(1, 7)
+
+# PNG graphic device doesn't play well with R Notebooks; copy and paste this
+# chunk to a new R script when ready to save
+
+# png("figures/clonality_immunomod_corr.png",
+#     width = 8*300, height = 10*300, res = 300, pointsize = 10)
+
+
+col_colors <- tibble(sample = colnames(mirna_cluster_mat)) %>% 
+    left_join(select(mirna_cluster_df, 
+                     sample, Disease, ClusterModel1) %>% 
+                  distinct(),
+              by = "sample") %>% 
+    left_join(tcga_colors, by = "Disease")
+
+gplots::heatmap.2(mirna_cluster_mat, Colv = FALSE,
+                  trace = "none", density.info = "none")
+# ,
+#                   rowsep = c(44, 47, 57, 68, 71), colsep = c(5, 13, 22),
+#                   col = my_cet_pal,
+#                   notecex = 1.5, cexRow = 1.2, cexCol = 1.2,
+#                   cellnote = clonality_mrna_padj_mat, notecol = "black",
+#                   RowSideColors = row_colors$Color,
+#                   lmat = lmat, lwid = lwid, lhei = lhei,
+#                   margins = c(10, 6), offsetCol = 0.1, offsetRow = 0.1,
+#                   key.title = NA, key.xlab = "ITH correlation",
+#                   key.par = list(mgp = c(1.5, 0.5, 0),
+#                                  mar = c(5, 3, 4, 1))))
+
+# par(mar = c(0, 0, 0, 0))
+# legend(0, -0.025,
+#        legend = distinct(row_colors, group, Color)$group,
+#        col = distinct(row_colors, group, Color)$Color,
+#        horiz = FALSE, xjust = 0, yjust = 1, ncol = 2,
+#        lty = 1, lwd = 7, cex = 0.8, seg.len = 0.8)
+
+# dev.off()
 ```
 

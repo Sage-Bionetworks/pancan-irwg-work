@@ -1184,6 +1184,7 @@ correlate_annotations <- mirna_mrna_corr_df %>%
 mirna_sig_corr_df <- bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df, 
           mirna_mut_load_corr_df, mirna_tcr_div_corr_df,
           mirna_mrna_corr_df) %>% 
+    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>% 
     filter(!is.na(p.adjust), 
            p.adjust < 0.05) %>% 
     mutate(disease = factor(disease, levels = tcga_colors$Disease)) %>% 
@@ -1191,20 +1192,6 @@ mirna_sig_corr_df <- bind_rows(mirna_leuk_frac_corr_df, mirna_ciber_frac_corr_df
     filter(!is.na(group))
 ```
 
-```{r}
-mirna_sig_corr_df %>% 
-    filter(correlate_type != "mRNA expression") %>% 
-    group_by(mirna) %>% 
-    tally()
-```
-
-```{r}
-mirna_sig_corr_df %>% 
-    filter(correlate_type == "mRNA expression") %>% 
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>% 
-    filter(mirna_target %in% mirna_mrna_target_df$mirna_target,
-           estimate < 0)
-```
 
 ```{r, fig.width=8, fig.height=5}
 mirna_sig_corr_df %>% 
@@ -1236,18 +1223,35 @@ mirna_support_df <- mirna_sig_corr_df %>%
     mutate(significant = TRUE,
            immunomodulator = correlate_type == "mRNA expression",
            infiltrate = correlate_type %in% c("CIBERSORT fraction", "leukocyte fraction"),
+           leukocyte = correlate_type == "leukocyte fraction",
+           celltype = correlate_type == "CIBERSORT fraction",
            mirbase_support = (estimate < 0) & (correlate_type == "mRNA expression") &
                mirna_target %in% mirna_mrna_target_df$mirna_target,
            sygnal_support = (correlate_type %in% c("CIBERSORT fraction", "leukocyte fraction")) &
                mirna_disease %in% mirna_causal_df$mirna_disease,
            immune_support = mirna_short %in% mirna_immune_tidy_df$mirna |
                mirna_short_ambiguous %in% mirna_immune_tidy_df$mirna,
-           strong = abs(estimate) > 0.5)
+           strong = abs(estimate) > 0.5,
+           immune_strong = immune_support & strong)
 ```
 
 ```{r}
 mirna_support_df %>% 
-    gather(flag, status, significant, immunomodulator, infiltrate, strong, 
+    gather(flag, status, significant, strong, immune_strong,
+           immunomodulator, infiltrate, leukocyte, celltype,
+           mirbase_support, sygnal_support, immune_support) %>% 
+    group_by(mirna, flag) %>%
+    summarize(support = n_distinct(disease[status])) %>%
+    ungroup() %>% 
+    filter(support > 0) %>% 
+    group_by(flag) %>% 
+    tally()
+```
+
+```{r}
+mirna_support_df %>% 
+    gather(flag, status, significant, strong,
+           immunomodulator, infiltrate, leukocyte, celltype,
            mirbase_support, sygnal_support, immune_support) %>% 
     group_by(disease, flag) %>%
     summarize(support = sum(status)) %>%
@@ -1255,7 +1259,7 @@ mirna_support_df %>%
     spread(flag, support) %>% 
     select(one_of(c("disease", "significant", "strong", "immune_support", 
              "immunomodulator", "mirbase_support",
-             "infiltrate", "sygnal_support")))
+             "infiltrate", "leukocyte", "celltype", "sygnal_support")))
 ```
 
 
@@ -1289,287 +1293,152 @@ mirna_sig_corr_df %>%
 ### With leukocyte fraction(s) & causal prediction
 
 ```{r}
-mirna_sig_corr_df %>% 
-    filter(abs(estimate) > 0.5) %>%
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type == "CIBERSORT fraction") %>%
+mirna_leuk_common_df <- mirna_support_df %>%
+    filter(sygnal_support & immune_support) %>% 
     group_by(mirna, disease) %>% 
-    summarize(num_types = n_distinct(label)) %>% 
+    summarize(num_types = n_distinct(group)) %>% 
     ungroup() %>% 
     group_by(mirna) %>%
-    mutate(total_types = sum(num_types),
-           avg_types = mean(num_types),
-           nz_disease = n_distinct(disease[num_types > 0])) %>%
+    mutate(nz_disease = n_distinct(disease[num_types > 0])) %>%
     ungroup() %>%
-    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
-    # filter(total_types >= 25) %>%
-    filter(nz_disease > 3 & avg_types > 1) %>%
-    # I
+    filter(nz_disease > 2)
+```
+
+```{r}
+mirna_leuk_common_df %>% 
     ggplot(aes(x = disease, y = mirna)) +
     geom_tile(aes(fill = num_types)) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
-```{r}
-mirna_sig_corr_df %>% 
-    filter(abs(estimate) > 0.5) %>%
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type == "CIBERSORT fraction") %>%
-    group_by(mirna, disease) %>% 
-    summarize(num_types = n_distinct(label)) %>% 
-    ungroup() %>% 
-    group_by(mirna) %>%
-    mutate(total_types = sum(num_types),
-           avg_types = mean(num_types),
-           nz_disease = n_distinct(disease[num_types > 0])) %>%
-    ungroup() %>%
-    arrange(desc(nz_disease), desc(avg_types)) %>%
-    filter(nz_disease > 3 & avg_types > 1) %>%
-    # filter(total_types >= 25) %>%
-    distinct(mirna) %>% 
-    .[["mirna"]] -> common_mirnas_leuk
-```
+```{r, fig.width=6, fig.height=3.5}
+plot_colors <- tcga_colors %>% 
+    filter(Disease %in% mirna_leuk_common_df$disease)
 
-```{r, fig.width=12, fig.height=3.5}
-current_colors <- tcga_colors %>% 
-    filter(Disease %in% filter(mirna_sig_corr_df, abs(estimate) > 0.5,
-                               mirna %in% common_mirnas_leuk)$disease) %>% 
-    filter(!(Disease %in% c("DLBC", "THYM", "LAML")))
-
-mirna_sig_corr_df %>% 
-    filter(abs(estimate) > 0.5) %>%
-    filter(mirna %in% common_mirnas_leuk) %>% 
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type != "mRNA expression") %>%
+p <- mirna_support_df %>% 
+    filter(sygnal_support & immune_support,
+           mirna %in% mirna_leuk_common_df$mirna) %>% 
     mutate(group = fct_inorder(group),
            mirna = str_extract(mirna, "miR.*"),
-           direction = ifelse(estimate > 0, "positive", "negative"),
-           disease = factor(disease, levels = current_colors$Disease)) %>%
+           correlation = ifelse(estimate > 0, "positive", "negative"),
+           disease = factor(disease, levels = plot_colors$Disease)) %>%
     ggplot(aes(y = label, x = disease)) +
-    geom_tile(aes(fill = disease, colour = direction), size = 0.4) +
-    scale_fill_manual(values = current_colors$Color) +
-    scale_colour_manual(values = c("black", "#BBBBBB")) +
+    geom_tile(aes(fill = disease, colour = correlation), size = 0.4) +
+    scale_fill_manual("Tumor Group", values = plot_colors$Color) +
+    scale_colour_manual("Correlation", values = c(my_cet_pal[1], my_cet_pal[256])) +
     guides(fill = guide_legend(nrow = 3, byrow = TRUE),
-           colour = guide_legend(override.aes = list(fill = "white"),
+           colour = guide_legend(override.aes = list(fill = "#CCCCCC"),
                                  reverse = TRUE)) +
     ylab("") +
+    xlab("") +
     theme(axis.text.x = element_blank(),
           axis.ticks.x = element_blank(),
           legend.position = "top",
-          strip.text.x = element_text(face = "bold"),
+          strip.text.x = element_text(face = "bold", angle = 90, hjust = 0),
           strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
           strip.background = element_blank()) +
     facet_grid(group ~ mirna, scales = "free", space = "free")
+p
+
+ggsave("../figures/mirna_leuk_supported_corr.png", p,
+       width = 17, height = 8, units = "cm", dpi = 300, scale = 2)
 ```
 
 ### With immunomodulators & predicted targets
 
 ```{r}
-mirna_sig_corr_df %>% 
-    filter(correlate_type == "mRNA expression") %>% 
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>% 
-    filter(mirna_target %in% mirna_mrna_target_df$mirna_target,
-           estimate < 0)
-```
-
-```{r}
-mirna_sig_corr_df %>% 
-    # filter(estimate < -0.2) %>%
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>% 
-    filter(mirna_target %in% mirna_mrna_target_df$mirna_target,
-           estimate < 0) %>% 
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type == "mRNA expression") %>%
+mirna_immunomod_common_df <- mirna_support_df %>%
+    filter(mirbase_support & immune_support) %>% 
     group_by(mirna, disease) %>% 
     summarize(num_types = n_distinct(group)) %>% 
     ungroup() %>% 
     group_by(mirna) %>%
-    mutate(total_types = sum(num_types),
-           avg_types = mean(num_types),
-           nz_disease = n_distinct(disease[num_types > 0])) %>%
+    mutate(nz_disease = n_distinct(disease[num_types > 0])) %>%
     ungroup() %>%
-    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
-    # filter(total_types >= 25) %>%
-    # filter(nz_disease > 16 & avg_types > 3.4) %>%
-    filter(nz_disease > 16) %>%
-    # I
+    distinct(mirna)
+    filter(nz_disease > 14)
+```
+
+```{r}
+mirna_immunomod_common_df %>% 
     ggplot(aes(x = disease, y = mirna)) +
     geom_tile(aes(fill = num_types)) +
     theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
 
-```{r}
-mirna_sig_corr_df %>% 
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>% 
-    filter(mirna_target %in% mirna_mrna_target_df$mirna_target,
-           estimate < 0) %>%     filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type == "mRNA expression") %>%
-    group_by(mirna, disease) %>% 
-    summarize(num_types = n_distinct(group)) %>% 
-    ungroup() %>% 
-    group_by(mirna) %>%
-    mutate(total_types = sum(num_types),
-           avg_types = mean(num_types),
-           nz_disease = n_distinct(disease[num_types > 0])) %>%
-    ungroup() %>%
-    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
-    # filter(total_types >= 25) %>%
-    # filter(nz_disease > 16 & avg_types > 3.4) %>%
-    filter(nz_disease > 16) %>%
-    distinct(mirna) %>% 
-    .[["mirna"]] -> common_mirnas_mrna_neg_targets
-```
+```{r, fig.width=6, fig.height=3.5}
+plot_colors <- tcga_colors %>% 
+    filter(Disease %in% mirna_immunomod_common_df$disease)
 
-
-```{r, fig.width=10, fig.height=3}
-current_colors <- tcga_colors %>% 
-    filter(Disease %in% filter(mirna_sig_corr_df, estimate < 0,
-                               mirna %in% common_mirnas_mrna_neg_targets)$disease) %>% 
-    filter(!(Disease %in% c("DLBC", "THYM", "LAML")))
-
-mirna_sig_corr_df %>% 
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>% 
-    filter(mirna_target %in% mirna_mrna_target_df$mirna_target,
-           estimate < 0) %>% 
-    filter(mirna %in% common_mirnas_mrna_neg_targets) %>% 
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type == "mRNA expression") %>%
+p <- mirna_support_df %>% 
+    filter(mirbase_support & immune_support,
+           mirna %in% mirna_immunomod_common_df$mirna) %>% 
     mutate(group = fct_inorder(group),
            mirna = str_extract(mirna, "miR.*"),
-           disease = factor(disease, levels = current_colors$Disease)) %>%
-    group_by(mirna, label) %>% 
-    mutate(num_diseases = n_distinct(disease)) %>% 
-    group_by(group) %>% 
-    mutate(label = fct_reorder(label, num_diseases)) %>% 
-    ungroup() %>% 
+           correlation = ifelse(estimate > 0, "positive", "negative"),
+           disease = factor(disease, levels = plot_colors$Disease)) %>%
     ggplot(aes(y = label, x = disease)) +
-    geom_tile(aes(fill = disease), colour = "#333333", size = 0.2) +
-    scale_fill_manual(values = current_colors$Color) +
+    geom_tile(aes(fill = disease), 
+              colour = my_cet_pal[1], size = 0.4) +
+    scale_fill_manual("Tumor Group", values = plot_colors$Color) +
     guides(fill = guide_legend(nrow = 3, byrow = TRUE)) +
     ylab("") +
+    xlab("") +
     theme(axis.text.x = element_blank(),
           axis.ticks.x = element_blank(),
           legend.position = "top",
-          strip.text.x = element_text(face = "bold"),
+          strip.text.x = element_text(face = "bold", angle = 90, hjust = 0),
           strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
           strip.background = element_blank()) +
     facet_grid(group ~ mirna, scales = "free", space = "free")
+p
+
+ggsave("../figures/mirna_immunomod_supported_corr.png", p,
+       width = 17, height = 5, units = "cm", dpi = 300, scale = 2)
 ```
-
-
-```{r, fig.width=10, fig.height=12}
-# my_cet_pal
-current_colors <- tcga_colors %>% 
-    filter(Disease %in% filter(mirna_sig_corr_df, estimate < 0,
-                               mirna %in% common_mirnas_mrna_neg_targets)$disease) %>% 
-    filter(!(Disease %in% c("DLBC", "THYM", "LAML")))
-
-mirna_sig_corr_df %>% 
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>% 
-    # filter(estimate < 0) %>% 
-    filter(mirna == "hsa-miR-182-5p") %>% 
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    # filter(correlate_type == "mRNA expression") %>%
-    mutate(predicted = mirna_target %in% mirna_mrna_target_df$mirna_target,
-           group = fct_inorder(group),
-           mirna = str_extract(mirna, "miR.*"),
-           disease = factor(disease, levels = current_colors$Disease)) %>%
-    group_by(mirna, label) %>% 
-    mutate(num_diseases = n_distinct(disease)) %>% 
-    group_by(group) %>% 
-    mutate(label = fct_reorder(label, num_diseases)) %>% 
-    ungroup() %>% 
-    ggplot(aes(y = label, x = disease)) +
-    geom_tile(aes(fill = estimate, colour = predicted, size = predicted)) +
-    scale_fill_gradientn(colours = my_cet_pal) +
-    scale_colour_manual(values = c("#333333", "#E69F00")) +
-    scale_size_manual(values = c(0.1, 1)) +
-    # scale_fill_manual(values = current_colors$Color) +
-    # guides(fill = guide_legend(nrow = 3, byrow = TRUE)) +
-    ylab("") +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "top",
-          strip.text.x = element_text(face = "bold"),
-          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
-          strip.background = element_blank()) +
-    facet_grid(group ~ mirna, scales = "free", space = "free")
-```
-
 
 ### All categories...
 
 ```{r}
-mirna_supported_df <- mirna_sig_corr_df %>%
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_"),
-           mirna_disease = str_c(mirna, disease, sep = "_")) %>% 
-    filter(mirna_target %in% mirna_mrna_target_df$mirna_target,
-           estimate < 0) %>% 
-    select(disease, mirna, correlate, estimate, p.adjust, correlate_type,
-           group, label, mirna_target, mirna_disease) %>% 
-    filter(mirna_disease %in% mirna_causal_df$mirna_disease) %>% 
-    mutate(mirna_short = str_extract(mirna, 
-                                     "(?<=hsa\\-).*"),
-           mirna_short_ambiguous = str_extract(mirna_short,
-                                               "[:alnum:]+\\-[:alnum:]+")) %>%
-    # select(mirna, mirna_short, mirna_short_ambiguous) %>% 
-    filter(mirna_short %in% mirna_immune_tidy_df$mirna |
-               mirna_short_ambiguous %in% mirna_immune_tidy_df$mirna)
-```
-
-```{r}
-mirna_supported_common_df <- mirna_supported_df %>% 
+mirna_all_common_df <- mirna_support_df %>%
     group_by(mirna, disease) %>% 
-    summarize(num_types = n_distinct(group)) %>% 
-    ungroup() %>% 
+    summarize(all_support = sum(mirbase_support) > 0 &
+                  sum(sygnal_support) > 0 &
+                  sum(immune_support) > 0) %>% 
+    filter(all_support) %>% 
     group_by(mirna) %>%
-    mutate(total_types = sum(num_types),
-           avg_types = mean(num_types),
-           nz_disease = n_distinct(disease[num_types > 0])) %>%
-    ungroup() %>%
-    arrange(desc(total_types), desc(nz_disease), desc(avg_types)) %>%
-    # filter(total_types >= 25) %>%
-    # filter(nz_disease > 16 & avg_types > 3.4) %>%
-    filter(nz_disease > 1) 
+    mutate(nz_disease = n_distinct(disease)) %>%
+    filter(nz_disease > 1)
 ```
 
-
-```{r}
-mirna_supported_common_df %>% 
-    ggplot(aes(x = disease, y = mirna)) +
-    geom_tile(aes(fill = num_types)) +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1))
-```
-
-```{r, fig.width=10, fig.height=12}
-mirna_sig_corr_df %>%
-    mutate(mirna_target = str_c(mirna, correlate, sep = "_")) %>%
-    # # filter(estimate < 0) %>% 
-    # filter(mirna == "hsa-miR-182-5p") %>% 
-    filter(!(disease %in% c("DLBC", "THYM", "LAML"))) %>%
-    filter(correlate_type != "mutation load") %>%
-    filter(mirna %in% mirna_supported_common_df$mirna) %>% 
-    mutate(predicted = mirna_target %in% mirna_mrna_target_df$mirna_target,
+```{r, fig.width=5, fig.height=6}
+p <- mirna_support_df %>% 
+    filter(mirna %in% mirna_all_common_df$mirna,
+           correlate_type != "mutation load") %>% 
+    mutate(support = (mirbase_support | sygnal_support) & immune_support,
            group = fct_inorder(group),
-           mirna_short = str_extract(mirna, "miR.*"),
-           disease = factor(disease, levels = tcga_colors$Disease)) %>%
+           mirna_short = str_extract(mirna, "miR.*")) %>%
     group_by(mirna, label) %>% 
     mutate(num_diseases = n_distinct(disease)) %>% 
     group_by(group) %>% 
     mutate(label = fct_reorder(label, num_diseases)) %>% 
     ungroup() %>% 
     ggplot(aes(y = label, x = disease)) +
-    geom_tile(aes(fill = estimate, colour = predicted, size = predicted)) +
-    scale_fill_gradientn(colours = my_cet_pal) +
-    scale_colour_manual(values = c("#333333", "#E69F00")) +
-    scale_size_manual(values = c(0.1, 1)) +
-    # scale_fill_manual(values = current_colors$Color) +
-    # guides(fill = guide_legend(nrow = 3, byrow = TRUE)) +
+    geom_tile(aes(fill = estimate, colour = support, size = support)) +
+    scale_fill_gradientn("Correlation", colours = my_cet_pal) +
+    scale_colour_manual("Support", values = c("#333333", "#E69F00")) +
+    scale_size_manual("Support", values = c(0.1, 1)) +
     ylab("") +
+    xlab("") +
     theme(axis.text.x = element_text(angle = 45, hjust = 1),
           legend.position = "top",
           strip.text.x = element_text(face = "bold"),
           strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
           strip.background = element_blank()) +
     facet_grid(group ~ mirna_short, scales = "free", space = "free")
+p
+
+ggsave("../figures/mir142_supported_corr.png", p,
+       width = 16, height = 16, units = "cm", dpi = 300, scale = 1.8)
 ```
 

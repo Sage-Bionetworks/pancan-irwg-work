@@ -15,5 +15,6 @@ if (!require(synapseClient)) {
 install.packages("feather")
 install.packages("ggthemes")
 install.packages("ggbeeswarm")
+install.packages("gplots")
 # BiocInstaller::biocLite(pkg_list, suppressUpdates = T, suppressAutoUpdate = T)
 

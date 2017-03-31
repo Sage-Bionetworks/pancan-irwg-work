@@ -154,6 +154,29 @@ subtype_mclust_df <- subtype_mclust_df %>%
 
 \ 
 
+## Leukocyte fraction
+
+### Retrieve/load data
+
+Cellular Content: syn7994728
+syn5808205 ("TCGA_all_leuk_estimate.masked.20170107.tsv")
+
+```{r}
+# file_data <- synGet("syn5808205", downloadLocation = "./")
+leuk_frac_file <- "../data/tcga/TCGA_all_leuk_estimate.masked.20170107.tsv"
+leuk_frac_df <- read_tsv(leuk_frac_file, col_names = FALSE) %>% 
+    set_names(c("disease", "id", "leuk_frac"))
+```
+
+### Sample filtering
+
+```{r}
+leuk_frac_df <- leuk_frac_df %>%
+    filter(!(id %in% exclude_samples$aliquot_barcode))
+```
+
+\  
+
 ## Sample matching
 
 Identify matched samples between mRNA and mClust data.
@@ -179,6 +202,25 @@ mrna_subtype_mclust_shared_ids <- inner_join(
     distinct() %>% 
     filter((str_extract(id_mrna, portion_id_minus_analyte_regex) 
             == str_extract(id_subtype_mclust, portion_id_minus_analyte_regex)))
+```
+
+Identify matched samples between mRNA and leukocyte fraction.
+
+```{r}
+leuk_frac_ids <- leuk_frac_df %>% 
+    select(id) %>%
+    mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", "")) %>% 
+    arrange()
+
+# only keep samples with matched vial ID AND portion number
+mrna_leuk_frac_shared_ids <- inner_join(
+    mrna_ids, leuk_frac_ids, 
+    by = "vial_id",
+    suffix = c("_mrna", "_leuk_frac")
+    ) %>% 
+    distinct() %>% 
+    filter((str_extract(id_mrna, portion_id_minus_analyte_regex)
+            == str_extract(id_leuk_frac, portion_id_minus_analyte_regex)))
 ```
 
 NOTE: 2 samples (vial IDs) were assayed on multiple plates (2x portion/plate IDs each); might need to average values across these.
@@ -230,17 +272,20 @@ if (!file.exists(mrna_immunomod_file) | force_format) {
 ### Subset/format sample data
 
 ```{r}
-immunomod_subtype_sample_df <- mrna_subtype_mclust_shared_ids %>% 
+immunomod_subtype_sample_df <- mrna_subtype_mclust_shared_ids %>%
     left_join(mrna_sample_df, by = c("id_mrna" = "SampleID")) %>% 
     left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
-    left_join(sample_qual_df %>% 
-                  select(aliquot_barcode, disease = `cancer type`) %>% 
-                  distinct(), 
-              by = c("id_mrna" = "aliquot_barcode")) %>%
-    select(vial_id, Center, platform, Adjustment, ClusterModel1, disease) %>%
-    arrange(ClusterModel1) %>% 
-    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1))) %>% 
-    distinct()
+    left_join(mrna_leuk_frac_shared_ids %>% 
+                  select(-vial_id), by = "id_mrna") %>% 
+    filter(!is.na(id_leuk_frac)) %>%
+    left_join(leuk_frac_df, by = c("id_leuk_frac" = "id")) %>%
+    select(vial_id, Center, platform, Adjustment, disease,
+    ClusterModel1, leuk_frac) %>%
+    group_by(vial_id, Center, platform, Adjustment, disease, ClusterModel1) %>%
+    summarise(leuk_frac = mean(leuk_frac, na.rm = TRUE)) %>%
+    ungroup() %>%
+    arrange(ClusterModel1) %>%
+    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1)))
 ```
 
 -----
@@ -301,9 +346,16 @@ Remove any genes with missing values in one or more samples.
 mrna_immunomod_df <- mrna_immunomod_df %>% 
     gather(sample, x, -gene_name) %>% 
     left_join(immunomod_subtype_sample_df, by = c("sample" = "vial_id")) %>% 
+    filter(!is.na(leuk_frac)) %>% 
     group_by(gene_name) %>% 
     filter(!any(is.na(x))) %>%
     ungroup()
+```
+
+
+```{r}
+mrna_immunomod_df %>% 
+    distinct(gene_name)
 ```
 
 \  
@@ -386,11 +438,6 @@ mrna_immunomod_pca_df %>%
 Breaking clusters out into separate facets, to highlight position of points for each...
 
 ```{r}
-mrna_immunomod_pca_df %>% 
-    distinct(disease)
-```
-
-```{r}
 subtype_colors <- c("red", "yellow", "green", "cyan", "blue", "magenta")
 
 bg_df <- mrna_immunomod_pca_df %>% 
@@ -428,6 +475,58 @@ mrna_immunomod_pca_df %>%
     scale_colour_manual(values = tcga_colors$Color)
 ```
 
+Points colored by leukocyte fraction.
+
+```{r}
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(aes(colour = leuk_frac), size = 1) +
+    xlab(pc1_label) +
+    ylab(pc2_label)
+```
+
+```{r}
+bg_df <- mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    select(-ClusterModel1)
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = leuk_frac)) +
+    geom_point(data = bg_df, colour = "gray", size = 1, alpha = 0.5) +
+    geom_point(aes(colour = ClusterModel1), size = 1) +
+    geom_smooth(method = "lm") +
+    xlab(pc1_label) +
+    # ylab(pc2_label) +
+    scale_colour_manual(values = subtype_colors) +
+    facet_wrap(~ ClusterModel1)
+```
+
+
+```{r}
+mrna_immunomod_pca %>% 
+    tidy("samples") %>% 
+    filter(PC == 1) %>% 
+    select(PC = value, vial_id = row) %>% 
+    left_join(immunomod_subtype_sample_df, by = "vial_id") %>% 
+    do(tidy(lm(PC ~ leuk_frac, data = .))) %>%
+    I
+```
+
+```{r}
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = ClusterModel1, y = leuk_frac)) +
+    geom_quasirandom(aes(fill = ClusterModel1), size = 1, alpha = 0.5,
+                     shape = 21, colour = "slategray", stroke = 0.2) +
+    geom_boxplot(aes(colour = ClusterModel1), alpha = 0.6,
+                 outlier.size = 0, outlier.alpha = 0) +    xlab(pc1_label) +
+    scale_color_manual(values = subtype_colors) +
+    scale_fill_manual(values = subtype_colors) +
+    guides(fill = FALSE, colour = FALSE) +
+    xlab("Subtype")
+```
+
 #### Batch effects?
 
 I used a simple ANOVA to check the association with each factor variable in the sample data and PC1. Pretty much everything but `platform` came up as highly significant (but this is with ~9,000 samples, so maybe not too surprising).
@@ -438,7 +537,7 @@ mrna_immunomod_pca %>%
     filter(PC == 1) %>% 
     select(PC = value, vial_id = row) %>% 
     left_join(immunomod_subtype_sample_df, by = "vial_id") %>% 
-    select(-vial_id) %>% 
+    select(-vial_id, -leuk_frac) %>% 
     gather(variable, value, -PC) %>% 
     group_by(variable) %>% 
     do(tidy(anova(lm(PC ~ value, .)))) %>% 
@@ -589,26 +688,47 @@ With more genes included, everything is still highly associated with PC1, with c
 
 Given some of the trends above, I'm not sure how much I'd trust these results, but I went ahead and tested whether any the immunomodulator genes showed significant differences in expression across clusters. I first tried ANOVA and then switched to Kruskal-Wallis; in both cases, I get pretty much perfect p-values across the board.
 
-```{r, include=FALSE}
+```{r, include=TRUE}
 dge_df <- mrna_immunomod_df %>% 
     mutate(log_x = log(x + 1)) %>% 
     group_by(gene_name) %>% 
-    # do(tidy(anova(lm(log_x ~ 0 + ClusterModel1 + Center, .)))) %>%
+    do(tidy(anova(lm(log_x ~ 0 + ClusterModel1, .)))) %>%
+    # do(tidy(kruskal.test(log_x ~ 0 + ClusterModel1, .))) %>%
+    ungroup() %>% 
+    # filter(term == "ClusterModel1") %>%
+    filter(term != "Residuals") %>% 
+    arrange(desc(statistic)) %>%
+    I
+
+dge_df[["p.adjust"]] <- p.adjust(dge_df$p.value, method = "BH")
+dge_df %>% 
+    select(gene_name, term, statistic, p.value, p.adjust)
+```
+
+```{r, include=TRUE}
+dge_df <- mrna_immunomod_df %>% 
+    mutate(log_x = log(x + 1)) %>% 
+    group_by(gene_name) %>% 
+    # do(tidy(anova(lm(log_x ~ 0 + ClusterModel1 + leuk_frac + ClusterModel1*leuk_frac, .)))) %>%
     do(tidy(kruskal.test(log_x ~ 0 + ClusterModel1, .))) %>%
     ungroup() %>% 
     # filter(term == "ClusterModel1") %>%
-    arrange(desc(statistic)) %>% 
+    # filter(term != "Residuals") %>% 
+    arrange(desc(statistic)) %>%
     I
 
-# dge_df[["p.adjust"]] <- p.adjust(dge_df$p.value, method = "BH")
+dge_df[["p.adjust"]] <- p.adjust(dge_df$p.value, method = "BH")
+dge_df %>% 
+    select(gene_name, statistic, p.value, p.adjust)
 ```
 
 ```{r}
-dge_df
+# dge_df
 ```
 
 ```{r}
 dge_df %>% 
+    arrange(desc(statistic)) %>% 
     mutate(gene_name = fct_inorder(gene_name)) %>% 
     ggplot(aes(x = gene_name, y = statistic)) +
     geom_col() +
@@ -620,7 +740,7 @@ Picking a few of the top genes (based on test statistic... as p-value isn't very
 ```{r}
 subtype_colors <- c("red", "yellow", "green", "cyan", "blue", "magenta")
 top_genes <- dge_df %>% 
-    slice(1:6) %>% 
+    slice(1:3) %>% 
     .[["gene_name"]]
 p <- mrna_immunomod_df %>% 
     filter(gene_name %in% top_genes) %>%
@@ -636,17 +756,43 @@ p <- mrna_immunomod_df %>%
     guides(colour = FALSE, fill = FALSE) +
     ylab("log(Expression)") +
     xlab("Subtype") +
-    facet_wrap(~ gene_name, ncol = 2) +
+    facet_wrap(~ gene_name, ncol = 3) +
     ggtitle("Immunomodulator expression across subtypes") +
     theme(title = element_text(size = 8),
           axis.title.x = element_text(size = 8),
           axis.title.y = element_text(size = 8))
 p
 
-# ggsave("../figures/immunomod_subtype_expression.png", p,
-#        width = 10, height = 10, units = "cm", dpi = 300, scale = 2)
+ggsave("../figures/immunomod_subtype_expression.png", p,
+       width = 10, height = 4.5, units = "cm", dpi = 300, scale = 2)
 
 ```
+
+```{r}
+p <- mrna_immunomod_df %>% 
+    filter(gene_name %in% top_genes) %>%
+    mutate(gene_name = factor(gene_name, levels = top_genes)) %>% 
+    mutate(log_x = log(x + 1)) %>%
+    ggplot(aes(y = log_x, x = leuk_frac)) +
+    geom_point(aes(fill = ClusterModel1), size = 1.5, alpha = 0.5,
+               shape = 21, colour = "slategray", stroke = 0.2) +
+    geom_smooth(method = "lm") +
+    scale_fill_manual(values = subtype_colors) +
+    guides(fill = FALSE) +
+    ylab("log(Expression)") +
+    xlab("Leukocyte Fraction") +
+    facet_wrap(~ gene_name) +
+    ggtitle("Immunomodulator correlation with leukocyte fraction") +
+    theme(title = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8))
+p
+
+ggsave("../figures/immunomod_subtype_leuk-frac.png", p,
+       width = 10, height = 4.5, units = "cm", dpi = 300, scale = 2)
+
+```
+
 
 Perhaps it would be better to restrict testing to within each cancer type? Or maybe I need to be going about this in a different way altogether...
 

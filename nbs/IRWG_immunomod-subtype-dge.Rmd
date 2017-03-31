@@ -386,17 +386,34 @@ mrna_immunomod_pca_df %>%
 Breaking clusters out into separate facets, to highlight position of points for each...
 
 ```{r}
+mrna_immunomod_pca_df %>% 
+    distinct(disease)
+```
+
+```{r}
+subtype_colors <- c("red", "yellow", "green", "cyan", "blue", "magenta")
+
 bg_df <- mrna_immunomod_pca_df %>% 
     spread(PC, value) %>% 
     select(-ClusterModel1)
-mrna_immunomod_pca_df %>% 
+p <- mrna_immunomod_pca_df %>% 
     spread(PC, value) %>% 
-    ggplot(aes(x = `1`, y = `2`, colour = ClusterModel1)) +
-    geom_point(data = bg_df, colour = "gray", size = 1, alpha = 0.5) +
-    geom_point(size = 1) +
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(data = bg_df, colour = "gray", size = 1.5, alpha = 0.5) +
+    geom_point(aes(fill = ClusterModel1), size = 1.5, alpha = 0.8,
+               shape = 21, colour = "black", stroke = 0.2) +
+    scale_fill_manual(values = subtype_colors) +
+    guides(fill = FALSE) +
     xlab(pc1_label) +
     ylab(pc2_label) +
-    facet_wrap(~ ClusterModel1)
+    facet_wrap(~ ClusterModel1, ncol = 2) +
+    ggtitle("PCA of immunomodulator expression across all tumor types") +
+    theme(title = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8))
+p
+# ggsave("../figures/immunomod_subtype_pca.png", p,
+#        width = 6, height = 10, units = "cm", dpi = 300, scale = 2)
 ```
 
 This plot shows points colored by cancer type.
@@ -425,9 +442,11 @@ mrna_immunomod_pca %>%
     gather(variable, value, -PC) %>% 
     group_by(variable) %>% 
     do(tidy(anova(lm(PC ~ value, .)))) %>% 
-    ggplot(aes(x = variable, y = -log10(p.value))) +
-    geom_point() +
-    geom_hline(yintercept = -log10(0.05), linetype = 2)
+    filter(term != "Residuals") %>% 
+    # ggplot(aes(x = variable, y = -log10(p.value))) +
+    # geom_point() +
+    # geom_hline(yintercept = -log10(0.05), linetype = 2) %>% 
+    I
 ```
 
 Taking a look at the overlap between some of the relevant variables. The effect of `Center` and `Adjustment` are likely to be closely related.
@@ -467,99 +486,99 @@ mrna_immunomod_pca_df %>%
 Trying to see whether some of these trends are also present when I include more genes for PCA.
 
 ```{r}
-mrna_norm_df <- data.table::fread("../data/tcga/EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.tsv")
+# mrna_norm_df <- data.table::fread("../data/tcga/EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.tsv")
 ```
 
 I'll randomly select 1000 samples, just to make the computation a bit less cumbersome, and I'll keep the top 1000 highly expressed genes (on average across samples).
 
 ```{r}
-rand_samples <- sample(1:ncol(mrna_norm_df) - 1, 1000)
-mrna_norm_mat <- mrna_norm_df %>% 
-    as_data_frame() %>% 
-    select(-gene_id) %>%
-    as.matrix()
-rownames(mrna_norm_mat) <- mrna_norm_df$gene_id
-mrna_norm_mat <- mrna_norm_mat[complete.cases(mrna_norm_mat), ]
-
-top_mrna <- mrna_norm_mat %>% 
-    rowMeans(na.rm = TRUE) %>% 
-    sort(decreasing = TRUE) %>% 
-    head(1000) %>% 
-    names()
-
-top_mrna_mat <- mrna_norm_mat[top_mrna, rand_samples]
-rm(mrna_norm_mat)
+# rand_samples <- sample(1:ncol(mrna_norm_df) - 1, 1000)
+# mrna_norm_mat <- mrna_norm_df %>% 
+#     as_data_frame() %>% 
+#     select(-gene_id) %>%
+#     as.matrix()
+# rownames(mrna_norm_mat) <- mrna_norm_df$gene_id
+# mrna_norm_mat <- mrna_norm_mat[complete.cases(mrna_norm_mat), ]
+# 
+# top_mrna <- mrna_norm_mat %>% 
+#     rowMeans(na.rm = TRUE) %>% 
+#     sort(decreasing = TRUE) %>% 
+#     head(1000) %>% 
+#     names()
+# 
+# top_mrna_mat <- mrna_norm_mat[top_mrna, rand_samples]
+# rm(mrna_norm_mat)
 ```
 
 ```{r}
-# convert expression df to matrix
-top_mrna_pca <- top_mrna_mat %>% 
-    magrittr::add(1) %>% 
-    log() %>% 
-    t() %>% 
-    prcomp()
+# # convert expression df to matrix
+# top_mrna_pca <- top_mrna_mat %>% 
+#     magrittr::add(1) %>% 
+#     log() %>% 
+#     t() %>% 
+#     prcomp()
 ```
 
 
 ```{r, warning=FALSE}
-pc2_df <- top_mrna_pca %>% 
-    tidy("pcs")
-
-top_mrna_pca_df <- top_mrna_pca %>%
-    tidy("samples") %>% 
-    filter(PC <= 2) %>% 
-    left_join(mrna_subtype_mclust_shared_ids, by = c("row" = "id_mrna")) %>% 
-    filter(!is.na(vial_id)) %>% 
-    left_join(mrna_sample_df, by = c("row" = "SampleID")) %>% 
-    left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
-    left_join(sample_qual_df, by = c("row" = "aliquot_barcode")) %>% 
-    arrange(ClusterModel1) %>% 
-    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1)))
+# pc2_df <- top_mrna_pca %>% 
+#     tidy("pcs")
+# 
+# top_mrna_pca_df <- top_mrna_pca %>%
+#     tidy("samples") %>% 
+#     filter(PC <= 2) %>% 
+#     left_join(mrna_subtype_mclust_shared_ids, by = c("row" = "id_mrna")) %>% 
+#     filter(!is.na(vial_id)) %>% 
+#     left_join(mrna_sample_df, by = c("row" = "SampleID")) %>% 
+#     left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
+#     left_join(sample_qual_df, by = c("row" = "aliquot_barcode")) %>% 
+#     arrange(ClusterModel1) %>% 
+#     mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1)))
 ```
 
 PC1 is a bit less substantial here.
 
 ```{r}
-pc1_label <- pc2_df %>% 
-    filter(PC == 1) %>% 
-    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
-    flatten_chr()
-
-pc2_label <- pc2_df %>% 
-    filter(PC == 2) %>% 
-    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
-    flatten_chr()
-
-top_mrna_pca_df %>% 
-    spread(PC, value) %>% 
-    ggplot(aes(x = `1`, y = `2`)) +
-    geom_point(aes(colour = ClusterModel1), size = 1.5) +
-    xlab(pc1_label) +
-    ylab(pc2_label)
+# pc1_label <- pc2_df %>% 
+#     filter(PC == 1) %>% 
+#     transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+#     flatten_chr()
+# 
+# pc2_label <- pc2_df %>% 
+#     filter(PC == 2) %>% 
+#     transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+#     flatten_chr()
+# 
+# top_mrna_pca_df %>% 
+#     spread(PC, value) %>% 
+#     ggplot(aes(x = `1`, y = `2`)) +
+#     geom_point(aes(colour = ClusterModel1), size = 1.5) +
+#     xlab(pc1_label) +
+#     ylab(pc2_label)
 ```
 
 With more genes included, everything is still highly associated with PC1, with cluster and disease displaying even more pronounced effects.
 
 ```{r, warning=FALSE}
-top_mrna_pca %>% 
-    tidy("samples") %>% 
-    filter(PC == 1) %>% 
-    select(PC = value, row) %>%
-    left_join(mrna_subtype_mclust_shared_ids, by = c("row" = "id_mrna")) %>%
-    filter(!is.na(vial_id)) %>%
-    left_join(mrna_sample_df, by = c("row" = "SampleID")) %>%
-    left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>%
-    left_join(sample_qual_df, by = c("row" = "aliquot_barcode")) %>%
-    select(PC, Center, platform = `platform.x`, Adjustment, ClusterModel1, 
-           disease = `cancer type`) %>%
-    arrange(ClusterModel1) %>% 
-    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1))) %>% 
-    gather(variable, value, -PC) %>%
-    group_by(variable) %>%
-    do(tidy(anova(lm(PC ~ value, .)))) %>%
-    ggplot(aes(x = variable, y = -log10(p.value))) +
-    geom_point() +
-    geom_hline(yintercept = -log10(0.05), linetype = 2)
+# top_mrna_pca %>% 
+#     tidy("samples") %>% 
+#     filter(PC == 1) %>% 
+#     select(PC = value, row) %>%
+#     left_join(mrna_subtype_mclust_shared_ids, by = c("row" = "id_mrna")) %>%
+#     filter(!is.na(vial_id)) %>%
+#     left_join(mrna_sample_df, by = c("row" = "SampleID")) %>%
+#     left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>%
+#     left_join(sample_qual_df, by = c("row" = "aliquot_barcode")) %>%
+#     select(PC, Center, platform = `platform.x`, Adjustment, ClusterModel1, 
+#            disease = `cancer type`) %>%
+#     arrange(ClusterModel1) %>% 
+#     mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1))) %>% 
+#     gather(variable, value, -PC) %>%
+#     group_by(variable) %>%
+#     do(tidy(anova(lm(PC ~ value, .)))) %>%
+#     ggplot(aes(x = variable, y = -log10(p.value))) +
+#     geom_point() +
+#     geom_hline(yintercept = -log10(0.05), linetype = 2)
 ```
 
 -----
@@ -578,30 +597,55 @@ dge_df <- mrna_immunomod_df %>%
     do(tidy(kruskal.test(log_x ~ 0 + ClusterModel1, .))) %>%
     ungroup() %>% 
     # filter(term == "ClusterModel1") %>%
+    arrange(desc(statistic)) %>% 
     I
 
 # dge_df[["p.adjust"]] <- p.adjust(dge_df$p.value, method = "BH")
 ```
 
 ```{r}
+dge_df
+```
+
+```{r}
 dge_df %>% 
-    arrange(desc(statistic))
+    mutate(gene_name = fct_inorder(gene_name)) %>% 
+    ggplot(aes(x = gene_name, y = statistic)) +
+    geom_col() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
 
 Picking a few of the top genes (based on test statistic... as p-value isn't very useful), I can see how their distributions are changing across clusters. There certainly seems to be a reasonable difference, but I don't know how interesting this is.
 
 ```{r}
-mrna_immunomod_df %>% 
-    filter(gene_name %in% c("EDNRB", "CXCL10", "ICOS", 
-                            "CCL5", "TNFRSF18", "CTLA4")) %>%
-    # filter(gene_name %in% c("HMGB1", "CD276", "HLA-C", 
-    #                         "HLA-A", "HLA-B", "VEGFB")) %>%
+subtype_colors <- c("red", "yellow", "green", "cyan", "blue", "magenta")
+top_genes <- dge_df %>% 
+    slice(1:6) %>% 
+    .[["gene_name"]]
+p <- mrna_immunomod_df %>% 
+    filter(gene_name %in% top_genes) %>%
+    mutate(gene_name = factor(gene_name, levels = top_genes)) %>% 
     mutate(log_x = log(x + 1)) %>%
-    ggplot(aes(y = log_x, x = ClusterModel1, colour = ClusterModel1)) +
-    geom_quasirandom(size = 0.5, alpha = 0.5) +
-    geom_boxplot(alpha = 0.6) +
-    theme_gray() +
-    facet_wrap(~ gene_name)
+    ggplot(aes(y = log_x, x = ClusterModel1)) +
+    geom_quasirandom(aes(fill = ClusterModel1), size = 1, alpha = 0.5,
+                     shape = 21, colour = "slategray", stroke = 0.2) +
+    geom_boxplot(aes(colour = ClusterModel1), alpha = 0.6,
+                 outlier.size = 0, outlier.alpha = 0) +
+    scale_fill_manual(values = subtype_colors) +
+    scale_colour_manual(values = subtype_colors) +
+    guides(colour = FALSE, fill = FALSE) +
+    ylab("log(Expression)") +
+    xlab("Subtype") +
+    facet_wrap(~ gene_name, ncol = 2) +
+    ggtitle("Immunomodulator expression across subtypes") +
+    theme(title = element_text(size = 8),
+          axis.title.x = element_text(size = 8),
+          axis.title.y = element_text(size = 8))
+p
+
+# ggsave("../figures/immunomod_subtype_expression.png", p,
+#        width = 10, height = 10, units = "cm", dpi = 300, scale = 2)
+
 ```
 
 Perhaps it would be better to restrict testing to within each cancer type? Or maybe I need to be going about this in a different way altogether...

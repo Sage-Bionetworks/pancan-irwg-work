@@ -1,0 +1,609 @@
+---
+title: "PanCan IRWG Immunomodulator Differential Expression in Subtypes"
+author: "James A. Eddy"
+date: '`r lubridate::today()`'
+output:
+  html_notebook:
+    code_folding: hide
+    fig_width: 8
+    toc: yes
+    toc_float: yes
+---
+
+# Summary
+
+Testing for differences in immunomodulator mRNA expression between immune expression subtypes.
+
+To skip past data loading / formatting, jump directly to the [EDA](#eda) or [differential expression](#dge) sections.
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE, cache=FALSE}
+# Synapse client
+library(synapseClient)
+
+# parallel computing
+library(parallel)
+
+# viz packages
+library(ggthemes)
+library(viridis)
+library(ggbeeswarm)
+
+# packages for general data munging, formatting
+library(feather)
+library(stringr)
+library(forcats)
+library(broom)
+library(tidyverse)
+
+my_theme_bw <- function() {
+    theme_bw() +
+        theme(axis.title = element_text(face = "bold", size = rel(0.9)),
+              legend.title = element_text(face = "bold"),
+              plot.title = element_text(face = "bold"))
+}
+ggplot2::theme_set(my_theme_bw())
+scale_fill_discrete <- function(...) scale_fill_colorblind(...)
+scale_fill_continuous <- function(...) scale_fill_viridis(...)
+scale_colour_discrete <- function(...) scale_color_colorblind(...)
+scale_colour_continuous <- function(...) scale_color_viridis(...)
+```
+
+-----
+
+\  
+
+# Prepare data
+
+## Retrieve data from Synapse
+
+```{r}
+if (!dir.exists("../data")) {
+    dir.create("../data")
+}
+synapseLogin()
+```
+
+## Collect sample IDs to exclude
+
+Sample Quality Annotations:
+syn4551248 ("merged_sample_quality_annotations.tsv")
+
+```{r}
+sample_qual_file <- synGet("syn4551248", downloadLocation = "../data/tcga/")
+sample_qual_df <- sample_qual_file %>% 
+    getFileLocation() %>% 
+    read_tsv()
+```
+
+Remove samples based on `Do_not_use=True`, and remove cases with `AWG_excluded_because_of_pathology=True`. 
+
+```{r}
+# samples to exclude from all datasets
+exclude_samples <- sample_qual_df %>% 
+    mutate(AWG_excluded_because_of_pathology = parse_logical(AWG_excluded_because_of_pathology),
+           Do_not_use = parse_logical(str_to_upper(Do_not_use))) %>% 
+    filter(AWG_excluded_because_of_pathology | Do_not_use)
+```
+
+\  
+
+## Gene expression sample data
+
+### Retrieve/load data
+
+Batch effects normalized mRNA data: syn4976363
+syn4976369 ("EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.tsv")
+syn4976366 (" EB++GeneExpAnnotation.tsv")
+
+```{r include=FALSE}
+mrna_synfolder <- "syn4976363"
+mrna_synfiles <- synapseQuery(
+    sprintf('select * from file where parentId=="%s"', mrna_synfolder)
+)
+
+# download files and store data/paths in new data frame
+mrna_files <- mrna_synfiles %>% 
+    mutate(file_data = map(file.id, function(synid) {
+        synGet(synid, downloadLocation = "../data/tcga")
+    }),
+    file_path = map_chr(file_data, getFileLocation))
+```
+
+Sample characteristics are stored in a tab-delimited text file (Synapse ID: `syn4976366`) and can be loaded with `read_tsv()`.
+
+```{r}
+# load sample data
+mrna_sample_file <- mrna_files %>% 
+    filter(file.id == "syn4976366") %>% 
+    .[["file_path"]]
+mrna_sample_df <- read_tsv(mrna_sample_file)
+```
+
+### Sample filtering
+
+Remove samples from mRNA dataset.
+
+```{r}
+mrna_sample_df <- mrna_sample_df %>% 
+    filter(!(SampleID %in% exclude_samples$aliquot_barcode))
+```
+
+\  
+
+## Immune subtype data - MClust
+
+### Retrieve/load data
+
+Sample Subtypes - Workspace_Immune_Subtypes: syn8343491
+syn8464746 ("five_signature_mclust_ensemble_results.tsv")
+
+```{r}
+subtype_mclust_file <- "../data/tcga/five_signature_mclust_ensemble_results.tsv"
+subtype_mclust_df <- read_tsv(subtype_mclust_file)
+```
+
+Note: recommend using `ClusterModel1` column
+
+### Sample filtering
+
+```{r}
+subtype_mclust_df <- subtype_mclust_df %>%
+    mutate(id = str_replace_all(AliquotBarcode, "\\.", "\\-")) %>% 
+    filter(!(id %in% exclude_samples$aliquot_barcode))
+```
+
+\ 
+
+## Sample matching
+
+Identify matched samples between mRNA and mClust data.
+
+```{r}
+mrna_ids <- mrna_sample_df %>% 
+    select(id = SampleID) %>%
+    mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", "")) %>% 
+    arrange()
+
+subtype_mclust_ids <- subtype_mclust_df %>% 
+    select(id) %>%
+    mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", "")) %>% 
+    arrange()
+
+# only keep samples with matched vial ID AND portion number
+portion_id_minus_analyte_regex <- "([:alnum:]+\\-){4}[0-9]+"
+mrna_subtype_mclust_shared_ids <- inner_join(
+    mrna_ids, subtype_mclust_ids, 
+    by = "vial_id",
+    suffix = c("_mrna", "_subtype_mclust")
+    ) %>% 
+    distinct() %>% 
+    filter((str_extract(id_mrna, portion_id_minus_analyte_regex) 
+            == str_extract(id_subtype_mclust, portion_id_minus_analyte_regex)))
+```
+
+NOTE: 2 samples (vial IDs) were assayed on multiple plates (2x portion/plate IDs each); might need to average values across these.
+
+\  
+
+## Format data for analysis
+
+### Subset/format expression data
+
+List of genes accessed [here](https://docs.google.com/spreadsheets/d/1aqOXYsU1ubkbxIZI_5p8ZRootgOAT0KweMA3LvSZ7HY/edit#gid=0) and saved as a TSV at `data/Cancer Immunomodulators - TCGA PanImmune Group - Direct Relationship.tsv`:
+
+```{r}
+gene_correlate_file <- "../data/Cancer Immunomodulators - TCGA PanImmune Group - Direct Relationship.tsv"
+gene_correlate_df <- read_tsv(gene_correlate_file)
+```
+
+mRNA normalized, batch corrected expression values for all samples are stored as a matrix in a TSV file (Synapse ID: `syn4976369`) and can be loaded with `read_tsv()`.
+
+
+```{r}
+mrna_immunomod_file <- "../data/intermediate/mrna_immunomodulators.feather"
+force_format <- FALSE # loading full expression data is slow; avoid if possible
+if (!file.exists(mrna_immunomod_file) | force_format) {
+    # load normalized, batch-corrected expression data
+    mrna_norm_file <- mrna_files %>% 
+        filter(file.id == "syn4976369") %>% 
+        .[["file_path"]]
+    mrna_norm_df <- read_tsv(mrna_norm_file, progress = FALSE)
+    
+    mrna_immunomod_df <- mrna_norm_df %>%
+        separate(gene_id, c("gene_name", "gene_id"), sep = "\\|") %>% 
+        filter(gene_name %in% gene_correlate_df$matched_name) %>% 
+        select(one_of(c("gene_name", "gene_id",
+                        mrna_subtype_mclust_shared_ids$id_mrna))) %>%
+        gather(sample, x, -gene_name, -gene_id) %>% 
+        left_join(mrna_ids, by = c("sample" = "id")) %>% 
+        group_by(vial_id, gene_name) %>% 
+        summarise(x = mean(x)) %>% 
+        ungroup() %>% 
+        spread(vial_id, x)
+    
+    write_feather(mrna_immunomod_df, mrna_immunomod_file)
+} else {
+    mrna_immunomod_df <- read_feather(mrna_immunomod_file)
+}
+```
+
+### Subset/format sample data
+
+```{r}
+immunomod_subtype_sample_df <- mrna_subtype_mclust_shared_ids %>% 
+    left_join(mrna_sample_df, by = c("id_mrna" = "SampleID")) %>% 
+    left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
+    left_join(sample_qual_df %>% 
+                  select(aliquot_barcode, disease = `cancer type`) %>% 
+                  distinct(), 
+              by = c("id_mrna" = "aliquot_barcode")) %>%
+    select(vial_id, Center, platform, Adjustment, ClusterModel1, disease) %>%
+    arrange(ClusterModel1) %>% 
+    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1))) %>% 
+    distinct()
+```
+
+-----
+
+\  
+
+# Explore data {#explore}
+
+## Set up plotting colors
+
+```{r}
+tcga_colors <- tribble(
+    ~Color, ~Disease,
+    "#ED2891", "BRCA",
+    "#B2509E", "GBM",
+    "#D49DC7", "LGG",
+    "#C1A72F", "ACC",
+    "#E8C51D", "PCPG",
+    "#F9ED32", "THCA",
+    "#104A7F", "CHOL",
+    "#9EDDF9", "COAD",
+    "#007EB5", "ESCA",
+    "#CACCDB", "LIHC",
+    "#6E7BA2", "PAAD",
+    "#DAF1FC", "READ",
+    "#00AEEF", "STAD",
+    "#F6B667", "CESC",
+    "#D97D25", "OV",
+    "#FBE3C7", "UCEC",
+    "#F89420", "UCS",
+    "#97D1A9", "HNSC",
+    "#009444", "UVM",
+    "#754C29", "LAML",
+    "#CEAC8F", "THYM",
+    "#3953A4", "DLBC",
+    "#BBD642", "SKCM",
+    "#00A99D", "SARC",
+    "#D3C3E0", "LUAD",
+    "#A084BD", "LUSC",
+    "#542C88", "MESO",
+    "#FAD2D9", "BLCA",
+    "#ED1C24", "KICH",
+    "#F8AFB3", "KIRC",
+    "#EA7075", "KIRP",
+    "#7E1918", "PRAD",
+    "#BE1E2D", "TGCT"
+)
+
+immunomod_subtype_sample_df <- immunomod_subtype_sample_df %>% 
+    mutate(disease = factor(disease, levels = tcga_colors$Disease))
+```
+
+## Clean up missing data
+
+Remove any genes with missing values in one or more samples.
+
+```{r}
+mrna_immunomod_df <- mrna_immunomod_df %>% 
+    gather(sample, x, -gene_name) %>% 
+    left_join(immunomod_subtype_sample_df, by = c("sample" = "vial_id")) %>% 
+    group_by(gene_name) %>% 
+    filter(!any(is.na(x))) %>%
+    ungroup()
+```
+
+\  
+
+## Check expression distributions
+
+Check whether genes are (roughly) normally distributed across samples. Note: expression values in the plots below are log-transformed.
+
+```{r}
+mrna_immunomod_df %>% 
+    group_by(ClusterModel1, gene_name) %>%
+    # just check first 100 samples
+    slice(1:100) %>%
+    ggplot(aes(x = log(x + 1))) +
+    stat_density(aes(group = sample), geom = "line", position = "identity",
+                 alpha = 0.2) +
+    facet_wrap(~ ClusterModel1) %>%
+    I
+```
+
+Seems reasonable...
+
+\  
+
+## PCA
+
+### Immunomodulator expression
+
+PCA is computed on the log-transformed expression values.
+
+```{r, warning=FALSE}
+# convert expression df to matrix
+mrna_immunomod_mat <- mrna_immunomod_df %>% 
+    mutate(log_x = log(x + 1)) %>% 
+    select(gene_name, sample, log_x) %>% 
+    spread(sample, log_x) %>% 
+    remove_rownames() %>% 
+    column_to_rownames("gene_name") %>% 
+    as.matrix()
+
+mrna_immunomod_pca <- mrna_immunomod_mat %>% 
+    t() %>% 
+    prcomp()
+```
+
+#### Plotting top PCs
+
+```{r, warning=FALSE}
+pc_df <- mrna_immunomod_pca %>% 
+    tidy("pcs")
+
+mrna_immunomod_pca_df <- mrna_immunomod_pca %>% 
+    tidy("samples") %>% 
+    filter(PC <= 2) %>% 
+    left_join(immunomod_subtype_sample_df, by = c("row" = "vial_id"))
+```
+
+The plot below shows samples plotted as points along the first two principle components (PCs). Points are colored by mClust cluster.
+
+```{r}
+pc1_label <- pc_df %>% 
+    filter(PC == 1) %>% 
+    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+    flatten_chr()
+
+pc2_label <- pc_df %>% 
+    filter(PC == 2) %>% 
+    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+    flatten_chr()
+
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(aes(colour = ClusterModel1), 
+               size = 1, alpha = 0.7) +
+    xlab(pc1_label) +
+    ylab(pc2_label)
+```
+
+Breaking clusters out into separate facets, to highlight position of points for each...
+
+```{r}
+bg_df <- mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    select(-ClusterModel1)
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`, colour = ClusterModel1)) +
+    geom_point(data = bg_df, colour = "gray", size = 1, alpha = 0.5) +
+    geom_point(size = 1) +
+    xlab(pc1_label) +
+    ylab(pc2_label) +
+    facet_wrap(~ ClusterModel1)
+```
+
+This plot shows points colored by cancer type.
+
+```{r}
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(aes(colour = disease), size = 1) +
+    xlab(pc1_label) +
+    ylab(pc2_label) +
+    scale_colour_manual(values = tcga_colors$Color)
+```
+
+#### Batch effects?
+
+I used a simple ANOVA to check the association with each factor variable in the sample data and PC1. Pretty much everything but `platform` came up as highly significant (but this is with ~9,000 samples, so maybe not too surprising).
+
+```{r, warning=FALSE}
+mrna_immunomod_pca %>% 
+    tidy("samples") %>% 
+    filter(PC == 1) %>% 
+    select(PC = value, vial_id = row) %>% 
+    left_join(immunomod_subtype_sample_df, by = "vial_id") %>% 
+    select(-vial_id) %>% 
+    gather(variable, value, -PC) %>% 
+    group_by(variable) %>% 
+    do(tidy(anova(lm(PC ~ value, .)))) %>% 
+    ggplot(aes(x = variable, y = -log10(p.value))) +
+    geom_point() +
+    geom_hline(yintercept = -log10(0.05), linetype = 2)
+```
+
+Taking a look at the overlap between some of the relevant variables. The effect of `Center` and `Adjustment` are likely to be closely related.
+
+```{r}
+table(immunomod_subtype_sample_df$Adjustment, immunomod_subtype_sample_df$Center)
+```
+
+Fortunately, clusters don't seem to be obviously described by `Adjustment` or `Center` (from what I've seen of the manuscript, not cancer type either).
+
+```{r}
+table(immunomod_subtype_sample_df$Adjustment, immunomod_subtype_sample_df$ClusterModel1)
+```
+
+```{r}
+table(immunomod_subtype_sample_df$Center, immunomod_subtype_sample_df$ClusterModel1)
+```
+
+PC plots for `Adjustment`:
+
+```{r}
+bg_df <- mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    select(-Adjustment)
+mrna_immunomod_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`, colour = Adjustment)) +
+    geom_point(data = bg_df, colour = "gray", size = 1, alpha = 0.5) +
+    geom_point(size = 1) +
+    xlab(pc1_label) +
+    ylab(pc2_label) +
+    facet_wrap(~ Adjustment)
+```
+
+### Checking with all highly expressed genes
+
+Trying to see whether some of these trends are also present when I include more genes for PCA.
+
+```{r}
+mrna_norm_df <- data.table::fread("../data/tcga/EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.tsv")
+```
+
+I'll randomly select 1000 samples, just to make the computation a bit less cumbersome, and I'll keep the top 1000 highly expressed genes (on average across samples).
+
+```{r}
+rand_samples <- sample(1:ncol(mrna_norm_df) - 1, 1000)
+mrna_norm_mat <- mrna_norm_df %>% 
+    as_data_frame() %>% 
+    select(-gene_id) %>%
+    as.matrix()
+rownames(mrna_norm_mat) <- mrna_norm_df$gene_id
+mrna_norm_mat <- mrna_norm_mat[complete.cases(mrna_norm_mat), ]
+
+top_mrna <- mrna_norm_mat %>% 
+    rowMeans(na.rm = TRUE) %>% 
+    sort(decreasing = TRUE) %>% 
+    head(1000) %>% 
+    names()
+
+top_mrna_mat <- mrna_norm_mat[top_mrna, rand_samples]
+rm(mrna_norm_mat)
+```
+
+```{r}
+# convert expression df to matrix
+top_mrna_pca <- top_mrna_mat %>% 
+    magrittr::add(1) %>% 
+    log() %>% 
+    t() %>% 
+    prcomp()
+```
+
+
+```{r, warning=FALSE}
+pc2_df <- top_mrna_pca %>% 
+    tidy("pcs")
+
+top_mrna_pca_df <- top_mrna_pca %>%
+    tidy("samples") %>% 
+    filter(PC <= 2) %>% 
+    left_join(mrna_subtype_mclust_shared_ids, by = c("row" = "id_mrna")) %>% 
+    filter(!is.na(vial_id)) %>% 
+    left_join(mrna_sample_df, by = c("row" = "SampleID")) %>% 
+    left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>% 
+    left_join(sample_qual_df, by = c("row" = "aliquot_barcode")) %>% 
+    arrange(ClusterModel1) %>% 
+    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1)))
+```
+
+PC1 is a bit less substantial here.
+
+```{r}
+pc1_label <- pc2_df %>% 
+    filter(PC == 1) %>% 
+    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+    flatten_chr()
+
+pc2_label <- pc2_df %>% 
+    filter(PC == 2) %>% 
+    transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
+    flatten_chr()
+
+top_mrna_pca_df %>% 
+    spread(PC, value) %>% 
+    ggplot(aes(x = `1`, y = `2`)) +
+    geom_point(aes(colour = ClusterModel1), size = 1.5) +
+    xlab(pc1_label) +
+    ylab(pc2_label)
+```
+
+With more genes included, everything is still highly associated with PC1, with cluster and disease displaying even more pronounced effects.
+
+```{r, warning=FALSE}
+top_mrna_pca %>% 
+    tidy("samples") %>% 
+    filter(PC == 1) %>% 
+    select(PC = value, row) %>%
+    left_join(mrna_subtype_mclust_shared_ids, by = c("row" = "id_mrna")) %>%
+    filter(!is.na(vial_id)) %>%
+    left_join(mrna_sample_df, by = c("row" = "SampleID")) %>%
+    left_join(subtype_mclust_df, by = c("id_subtype_mclust" = "id")) %>%
+    left_join(sample_qual_df, by = c("row" = "aliquot_barcode")) %>%
+    select(PC, Center, platform = `platform.x`, Adjustment, ClusterModel1, 
+           disease = `cancer type`) %>%
+    arrange(ClusterModel1) %>% 
+    mutate(ClusterModel1 = fct_inorder(as.character(ClusterModel1))) %>% 
+    gather(variable, value, -PC) %>%
+    group_by(variable) %>%
+    do(tidy(anova(lm(PC ~ value, .)))) %>%
+    ggplot(aes(x = variable, y = -log10(p.value))) +
+    geom_point() +
+    geom_hline(yintercept = -log10(0.05), linetype = 2)
+```
+
+-----
+
+\  
+
+# Differential expression testing {#dge}
+
+Given some of the trends above, I'm not sure how much I'd trust these results, but I went ahead and tested whether any the immunomodulator genes showed significant differences in expression across clusters. I first tried ANOVA and then switched to Kruskal-Wallis; in both cases, I get pretty much perfect p-values across the board.
+
+```{r, include=FALSE}
+dge_df <- mrna_immunomod_df %>% 
+    mutate(log_x = log(x + 1)) %>% 
+    group_by(gene_name) %>% 
+    # do(tidy(anova(lm(log_x ~ 0 + ClusterModel1 + Center, .)))) %>%
+    do(tidy(kruskal.test(log_x ~ 0 + ClusterModel1, .))) %>%
+    ungroup() %>% 
+    # filter(term == "ClusterModel1") %>%
+    I
+
+# dge_df[["p.adjust"]] <- p.adjust(dge_df$p.value, method = "BH")
+```
+
+```{r}
+dge_df %>% 
+    arrange(desc(statistic))
+```
+
+Picking a few of the top genes (based on test statistic... as p-value isn't very useful), I can see how their distributions are changing across clusters. There certainly seems to be a reasonable difference, but I don't know how interesting this is.
+
+```{r}
+mrna_immunomod_df %>% 
+    filter(gene_name %in% c("EDNRB", "CXCL10", "ICOS", 
+                            "CCL5", "TNFRSF18", "CTLA4")) %>%
+    # filter(gene_name %in% c("HMGB1", "CD276", "HLA-C", 
+    #                         "HLA-A", "HLA-B", "VEGFB")) %>%
+    mutate(log_x = log(x + 1)) %>%
+    ggplot(aes(y = log_x, x = ClusterModel1, colour = ClusterModel1)) +
+    geom_quasirandom(size = 0.5, alpha = 0.5) +
+    geom_boxplot(alpha = 0.6) +
+    theme_gray() +
+    facet_wrap(~ gene_name)
+```
+
+Perhaps it would be better to restrict testing to within each cancer type? Or maybe I need to be going about this in a different way altogether...
+
+

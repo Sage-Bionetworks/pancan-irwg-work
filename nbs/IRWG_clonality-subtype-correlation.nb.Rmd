@@ -1,0 +1,587 @@
+---
+title: "PanCan IRWG Tumor Clonality Correlation within Immune Subytpes"
+author: "James A. Eddy"
+date: '`r lubridate::today()`'
+output:
+  html_notebook:
+    code_folding: hide
+    fig_width: 8
+    toc: yes
+    toc_float: yes
+---
+
+# Summary
+
+Exploring associations of tumor clonality across immune subtypes in TCGA with suggested correlates defined by the Immune Response Working Group:
+
++ Overall Leukocyte fraction  
++ Individual Relative CIBERSORT fraction  
++ Mutation Load  
++ TCR,BCR Diversity  
++ Gene expression
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE, cache=FALSE}
+# Synapse client
+library(synapseClient)
+
+# viz packages
+library(ggthemes)
+library(viridis)
+library(ggbeeswarm)
+
+# packages for general data munging, formatting
+library(feather)
+library(stringr)
+library(forcats)
+library(broom)
+library(tidyverse)
+
+my_theme_bw <- function() {
+    theme_bw() +
+        theme(axis.title = element_text(face = "bold", size = rel(0.9)),
+              legend.title = element_text(face = "bold"),
+              plot.title = element_text(face = "bold"))
+}
+ggplot2::theme_set(my_theme_bw())
+scale_fill_discrete <- function(...) scale_fill_colorblind(...)
+scale_fill_continuous <- function(...) scale_fill_viridis(...)
+scale_colour_discrete <- function(...) scale_color_colorblind(...)
+scale_colour_continuous <- function(...) scale_color_viridis(...)
+```
+
+-----
+
+\  
+
+# Prepare data
+
+## Retrieve clonality data from Synapse
+
+Data are stored on Synapse in the folder `syn4602485` for "Aneuploidy and Copy number".
+
+Aneuploidy and Copy number: syn4602485
+syn7300639 ("Purity_Ploidy_All_Samples_9_28_16.tsv")
+filename: "TCGA_mastercalls.abs_tables_JSedit.fixed.txt "
+
+```{r}
+if (!dir.exists("../data")) {
+    dir.create("../data")
+}
+synapseLogin()
+
+# # file_data <- synGet("syn7300639", downloadLocation = "./data/tcga")
+# clonality_file <- "../data/tcga/TCGA_mastercalls.abs_tables_JSedit.fixed.txt"
+# clonality_df <- read_tsv(clonality_file)
+```
+
+```{r}
+panimmune_fm_file <- "../data/tcga/PanImmune_FeatureMatrix_20170505.tsv"
+panimmune_fm_df <- read_tsv(panimmune_fm_file)
+```
+
+
+## Sample filtering
+
+Sample Quality Annotations:
+syn4551248 ("merged_sample_quality_annotations.tsv")
+
+```{r}
+sample_qual_file <- synGet("syn4551248", downloadLocation = "../data/tcga/")
+sample_qual_df <- sample_qual_file %>% 
+    getFileLocation() %>% 
+    read_tsv()
+```
+
+Remove samples based on `Do_not_use=True`, and remove cases with `AWG_excluded_because_of_pathology=True`. 
+
+```{r}
+# samples to exclude from all datasets
+exclude_samples <- sample_qual_df %>% 
+    mutate(AWG_excluded_because_of_pathology = parse_logical(AWG_excluded_because_of_pathology),
+           Do_not_use = parse_logical(str_to_upper(Do_not_use))) %>% 
+    filter(AWG_excluded_because_of_pathology | Do_not_use)
+```
+
+Remove samples from clonality dataset, add disease types. Also remove samples with missing values for subclonal faction. Add additional column to store vial ID (to ease mapping between data sets).
+
+```{r}
+# clonality_corr_df <- clonality_df %>% 
+#     filter(!(sample %in% exclude_samples$aliquot_barcode),
+#            !is.na(`Subclonal genome fraction`)) %>% 
+#     left_join(sample_qual_df %>% 
+#                   select(aliquot_barcode, `cancer type`),
+#               by = c("sample" = "aliquot_barcode")) %>% 
+#     mutate(vial_id = str_replace(sample, "(\\-[:alnum:]+){3}$", ""))
+```
+
+Remove samples from feature matrix based on quality filters. Also remove samples with missing values for subclonal fraction, leukocyte fraction, or immune subtype.
+
+```{r}
+clonality_subtype_corr_df <- panimmune_fm_df %>% 
+    filter(!(Representative_Expression_Matrix_AliquotBarcode %in% exclude_samples$aliquot_barcode)) %>% 
+    filter(!is.na(Subtype_Immune_Model_Based),
+           !is.na(leukocyte_fraction),
+           !is.na(Subclonal_genome_fraction))
+```
+
+\  
+
+## Subset correlates
+
+Drop some of the variables that won't be used for correlation tests with clonality.
+
+```{r}
+# names(clonality_subtype_corr_df)
+demographics <- c("gender", "age_at_initial_pathologic_diagnosis", "ethnicity",
+                  "height", "weight")
+survival_vars <- c("OS", "OS_time", "PFI_1", "PFI_time_1")
+xcr_nonshannon_vars <- c("totTCR_reads", "BCR_evenness_by_seq", "BCR_num_unique_seq")
+nonmodel_subtypes <- c("Subtype_Curated_Malta_Noushmehr_et_al", 
+                       "Study_Histological_Subtype", "Major_Histological_Type")
+indel_neoantigens <- c("indel_num", "indel_neoantigen_num")
+gene_set_scores <- c("Module3_IFN_score", "TGFB_score_21050467", "CSF1_response",
+                     "CHANG_CORE_SERUM_RESPONSE_UP", "LIexpression_score")
+cibersort_aggregates <- names(clonality_subtype_corr_df) %>%
+    str_extract(".*Aggregate.*") %>% 
+    na.omit() %>% 
+    as.character()
+th_sig_scores <- c("Th1.cells", "Th17.cells", "Th2.cells")
+cna_vars <- c("AS", "AS_prime", "LOH_n_seg", "LOH_frac_altered", 
+              "HRD", "n_segs", "frac_altered")
+stemness_vars <- c("StemnessScoreRNA", "StemnessScoreDNA")
+viral_expression <- names(clonality_subtype_corr_df) %>%
+    str_extract(".*V_Normalized_RPM") %>% 
+    na.omit() %>% 
+    as.character()
+other_expression_scores <- c("CD103pos_CD103neg_ratio_25446897", 
+                             "CD103pos_mean_25446897", "Module11_Prolif_score")
+exclude_variables <- c(demographics, survival_vars, xcr_nonshannon_vars,
+                       nonmodel_subtypes, indel_neoantigens, gene_set_scores, 
+                       cibersort_aggregates, th_sig_scores, 
+                       cna_vars, stemness_vars,
+                       viral_expression, other_expression_scores)
+clonality_subtype_corr_sub_df <- clonality_subtype_corr_df %>% 
+    select(-one_of(exclude_variables))
+```
+
+## Expand immunomodulator expression
+
+### Load and transpose expression data
+
+```{r}
+mrna_immunomod_file <- "../data/intermediate/mrna_immunomodulators.feather"
+mrna_immunomod_df <- read_feather(mrna_immunomod_file)
+mrna_immunomod_tr_df <- mrna_immunomod_df %>%
+    select(-gene_name) %>% 
+    t() %>% 
+    as.data.frame() %>%
+    set_names(mrna_immunomod_df$gene_name) %>%
+    rownames_to_column("vial_id") %>%
+    slice(-1)
+```
+
+### Merge with correlate table
+
+```{r}
+clonality_subtype_master_corr_df <- clonality_subtype_corr_sub_df %>% 
+    mutate(id = Representative_Expression_Matrix_AliquotBarcode,
+           vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", "")) %>% 
+    select(-CD274, -CTLA4, -PDCD1) %>% 
+    left_join(mrna_immunomod_tr_df, by = "vial_id")
+```
+
+-----
+
+\  
+
+# Explore ITH distributions
+
+```{r}
+clonality_subtype_master_corr_df %>% 
+    filter(Subtype_Immune_Model_Based == "C3") %>% 
+    ggplot(aes(x = rank(Subclonal_genome_fraction), y = rank(numberOfImmunogenicMutation))) +
+    geom_point() +
+    stat_smooth(method="loess")
+```
+
+```{r}
+clonality_subtype_master_corr_df %>% 
+    ggplot(aes(x = Subclonal_genome_fraction)) +
+    geom_histogram(aes(fill = Subtype_Immune_Model_Based), bins = 50, alpha = 0.8) +
+    scale_fill_manual(values = c("red", "yellow", "green", "cyan", "blue", "magenta")) +
+    facet_wrap(~ Subtype_Immune_Model_Based, scales = "free_y") +
+    guides(fill = FALSE) +
+    theme_gray()
+```
+
+```{r}
+table(clonality_subtype_master_corr_df$Subclonal_genome_fraction == 0)
+```
+
+```{r}
+clonality_subtype_master_corr_df %>% 
+    filter(Subclonal_genome_fraction > 0) %>%
+    ggplot(aes(x = Subclonal_genome_fraction)) +
+    geom_histogram(aes(fill = Subtype_Immune_Model_Based), bins = 50, alpha = 0.8) +
+    scale_fill_manual(values = c("red", "yellow", "green", "cyan", "blue", "magenta")) +
+    facet_wrap(~ Subtype_Immune_Model_Based, scales = "free_y") +
+    guides(fill = FALSE) +
+    theme_gray()
+```
+
+```{r}
+p <- clonality_subtype_master_corr_df %>% 
+    # filter(Subclonal_genome_fraction > 0) %>%
+    select(ITH = Subclonal_genome_fraction, Subtype = Subtype_Immune_Model_Based) %>% 
+    mutate(ITH_probit = qnorm(ITH),
+           ITH_logit = log(ITH / (1 - ITH))) %>% 
+    gather(transform, value, -Subtype) %>% 
+    ggplot(aes(x = value)) +
+    geom_density(aes(colour = Subtype)) +
+    scale_colour_manual(values = c("red", "yellow", "green", "cyan", "blue", "magenta")) +
+    guides(fill = FALSE, colour = guide_legend(nrow = 1)) +
+    theme_gray() +
+    theme(legend.position = "bottom") +
+    facet_wrap(~ transform, nrow = 1, scales = "free") +
+    ggtitle("ITH distribution per subtype", 
+            "all ITH values (infinite values clipped in logit/probit plots)")
+p
+ggsave("../ith_all_dists.png", p, width = 6, height = 3.5)
+```
+
+
+
+\  
+
+# Compute correlation stats
+
+For each immune subtype, correlate clonality (subclonal genome fraction) against all other variables using Spearman.
+
+```{r, warning=FALSE}
+clonality_subtype_spearman_df <- clonality_subtype_master_corr_df %>%
+    filter((!Study %in% c("LAML", "THYM", "DLBC"))) %>% 
+    select(-ParticipantBarcode, -Study, -vial_id, -id, 
+           -Representative_Expression_Matrix_AliquotBarcode) %>% 
+    group_by(Subtype_Immune_Model_Based) %>% 
+    nest() %>% 
+    mutate(data = map(data, function(subtype_df) {
+        subtype_df %>% 
+            gather(correlate, x, -Subclonal_genome_fraction, convert = FALSE) %>%
+            group_by(correlate) %>%
+            do(tidy(cor.test(.$Subclonal_genome_fraction, .$x, 
+                             method = "spearman"))) %>% 
+            ungroup()
+    })) %>%
+    unnest(data)
+
+clonality_subtype_spearman_df[["p.adjust"]] <- clonality_subtype_spearman_df %>% 
+    .[["p.value"]] %>% 
+    p.adjust(method = "BH")
+```
+
+```{r, warning=FALSE}
+clonality_subtype_regression_df <- clonality_subtype_master_corr_df %>%
+    filter((!Study %in% c("LAML", "THYM", "DLBC"))) %>% 
+    select(-ParticipantBarcode, -Study, -vial_id, -id, 
+           -Representative_Expression_Matrix_AliquotBarcode) %>% 
+    group_by(Subtype_Immune_Model_Based) %>% 
+    nest() %>% 
+    mutate(data = map(data, function(subtype_df) {
+        subtype_df %>% 
+            # mutate(ith_logit = log(Subclonal_genome_fraction / (1-Subclonal_genome_fraction))) %>% 
+            # select(-Subclonal_genome_fraction) %>% 
+            gather(correlate, x, -Subclonal_genome_fraction, convert = FALSE) %>%
+            group_by(correlate) %>%
+            # do(tidy(lm(ith_logit ~ x, data = .))) %>% 
+            do(tidy(glm(Subclonal_genome_fraction ~ x,
+                        family = binomial(link = "probit"),
+                        data = .))) %>%
+            ungroup()
+    })) %>%
+    unnest(data)
+
+# clonality_subtype_spearman_df[["p.adjust"]] <- clonality_subtype_spearman_df %>% 
+#     .[["p.value"]] %>% 
+#     p.adjust(method = "BH")
+```
+
+\  
+
+# Summarize results
+
+```{r}
+get_cet_pal <- function(cet_path) {
+    read_lines(cet_path) %>%
+        as.list() %>%
+        map_chr(function(c) {
+            c_rgb <- str_split_fixed(string = c, pattern = ",", n = 3)
+            rgb(c_rgb[1], c_rgb[2], c_rgb[3], maxColorValue = 255)
+        })
+}
+
+# here's an example with the diverging blue-to yellow colormap:
+cet_path <- "~/Downloads/CETperceptual_csv_0_255/diverging-linear_bjy_30-90_c45_n256.csv"
+my_cet_pal <- get_cet_pal(cet_path)
+```
+
+```{r}
+correlate_type_levels <- c("Cell Content", "Immune Cell Fraction",
+                           "Mutation Load", "Neoantigen Load",
+                           "TCR/BCR Diversity", "Immunomodulator Expression")
+correlate_key <- clonality_subtype_spearman_df %>%
+    distinct(correlate) %>% 
+    mutate(correlate_type = case_when(
+        str_detect(.$correlate, "mutationrate") ~ "Mutation Load",
+        str_detect(.$correlate, "numberOf") ~ "Neoantigen Load",
+        str_detect(str_to_lower(.$correlate), "_fraction") ~ "Cell Content",
+        str_detect(.$correlate, "(TCR|BCR)") ~ "TCR/BCR Diversity"
+    ),
+    correlate_type = if_else(is.na(correlate_type) & 
+                                 correlate %in% mrna_immunomod_df$gene_name,
+                             "Immunomodulator Expression", correlate_type),
+    correlate_type = if_else(is.na(correlate_type) & 
+                                 correlate %in% c("CD68", "CD8A", "TREM1"),
+                             "Immunomodulator Expression", correlate_type),
+    correlate_type = if_else(is.na(correlate_type),
+                             "Immune Cell Fraction", correlate_type),
+    correlate_type = factor(correlate_type, levels = correlate_type_levels)
+    )
+```
+
+```{r}
+p <- clonality_subtype_spearman_df %>% 
+    left_join(correlate_key, by = "correlate") %>% 
+    mutate(direction = ifelse(estimate >= 0, 1, -1)) %>% 
+    filter(correlate_type %in% c("Cell Content", "Immune Cell Fraction")) %>% 
+    ggplot(aes(y = correlate, x = Subtype_Immune_Model_Based)) +
+    # geom_tile(aes(fill = estimate)) +
+    geom_tile(aes(fill = direction * -log10(p.adjust)), colour = "white") +
+    scale_fill_gradientn(colours = my_cet_pal) +
+    scale_x_discrete(expand = c(0, 0)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    facet_grid(correlate_type ~ ., scales = "free_y", space = "free_y") +
+    theme(legend.position = "top",
+          strip.text.x = element_text(face = "bold", angle = 0, hjust = 0),
+          strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
+          strip.background = element_blank(),
+          panel.spacing.y = unit(1, "points"))
+p
+ggsave("../ith_infiltrate_corr.png", width = 5, height = 5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-----
+
+## Set up plotting colors
+
+```{r}
+tcga_colors <- tribble(
+    ~Color, ~Disease,
+    "#ED2891", "BRCA",
+    "#B2509E", "GBM",
+    "#D49DC7", "LGG",
+    "#C1A72F", "ACC",
+    "#E8C51D", "PCPG",
+    "#F9ED32", "THCA",
+    "#104A7F", "CHOL",
+    "#9EDDF9", "COAD",
+    "#007EB5", "ESCA",
+    "#CACCDB", "LIHC",
+    "#6E7BA2", "PAAD",
+    "#DAF1FC", "READ",
+    "#00AEEF", "STAD",
+    "#F6B667", "CESC",
+    "#D97D25", "OV",
+    "#FBE3C7", "UCEC",
+    "#F89420", "UCS",
+    "#97D1A9", "HNSC",
+    "#009444", "UVM",
+    "#754C29", "LAML",
+    "#CEAC8F", "THYM",
+    "#3953A4", "DLBC",
+    "#BBD642", "SKCM",
+    "#00A99D", "SARC",
+    "#D3C3E0", "LUAD",
+    "#A084BD", "LUSC",
+    "#542C88", "MESO",
+    "#FAD2D9", "BLCA",
+    "#ED1C24", "KICH",
+    "#F8AFB3", "KIRC",
+    "#EA7075", "KIRP",
+    "#7E1918", "PRAD",
+    "#BE1E2D", "TGCT"
+)
+
+tcga_colors <- tcga_colors %>% 
+    filter((!Disease %in% c("LAML", "THYM", "DLBC")))
+
+clonality_corr_df <- clonality_corr_df %>% 
+    dplyr::rename(Disease = `cancer type`) %>% 
+    filter((!Disease %in% c("LAML", "THYM", "DLBC"))) %>% 
+    mutate(Disease = factor(Disease, levels = tcga_colors$Disease))
+```
+
+
+-----
+
+\  
+
+# Prepare correlate data
+
++ Overall Leukocyte fraction  
++ Individual Relative CIBERSORT fraction  
++ Mutation Load  
++ TCR,BCR Diversity  
++ Gene Expression
+
+## Add immune subtype assignments
+
+### Retrieve/load immune subtype data data
+
+Sample Subtypes - Workspace_Immune_Subtypes: syn8343491
+syn8464746 ("five_signature_mclust_ensemble_results.tsv")
+
+```{r}
+# subtype_mclust_file <- "../data/tcga/five_signature_mclust_ensemble_results.tsv"
+# subtype_mclust_df <- read_tsv(subtype_mclust_file)
+```
+
+Note: recommend using `ClusterModel1` column
+
+### Sample filtering
+
+```{r}
+# subtype_mclust_df <- subtype_mclust_df %>%
+#     mutate(id = str_replace_all(AliquotBarcode, "\\.", "\\-")) %>% 
+#     filter(!(id %in% exclude_samples$aliquot_barcode))
+```
+
+### Merge clonality and subtype data
+
+```{r}
+# # only keep samples with matched vial ID AND portion number
+# portion_id_minus_analyte_regex <- "([:alnum:]+\\-){4}[0-9]+"
+# 
+# clonality_subtype_df <- clonality_corr_df %>% 
+#     left_join(subtype_mclust_df, by = c("vial_id" = "SampleBarcode")) %>% 
+#     filter(!is.na(ClusterModel1)) %>% 
+#     select(vial_id, disease = Disease, 
+#            id_clonality = sample, subclonal_frac = `Subclonal genome fraction`, 
+#            id_subtype = id,subtype = ClusterModel1) %>% 
+#     filter((str_extract(id_clonality, portion_id_minus_analyte_regex) 
+#             == str_extract(id_subtype, portion_id_minus_analyte_regex))) %>% 
+#     distinct() %>% 
+#     select(-id_subtype)
+```
+
+-----
+
+\  
+
+## Leukocyte fraction
+
+### Retrieve/load data
+
+Cellular Content: syn7994728
+syn5808205 ("TCGA_all_leuk_estimate.masked.20170107.tsv")
+
+```{r}
+# # file_data <- synGet("syn5808205", downloadLocation = "./")
+# leuk_frac_file <- "../data/tcga/TCGA_all_leuk_estimate.masked.20170107.tsv"
+# leuk_frac_df <- read_tsv(leuk_frac_file, col_names = FALSE) %>% 
+#     set_names(c("disease", "id", "leuk_frac"))
+```
+
+### Sample filtering
+
+```{r}
+# leuk_frac_df <- leuk_frac_df %>%
+#     filter(!(id %in% exclude_samples$aliquot_barcode)) %>% 
+#     mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", ""))
+```
+
+### Add leukocyte fraction
+
+NOTE: several samples were assayed on multiple plates; average the leukocyte fraction across these before computing correlations.
+
+```{r}
+# clonality_subtype_corr_df <- leuk_frac_df %>% 
+#     select(id_leuk_frac = id, leuk_frac, vial_id) %>% 
+#     left_join(clonality_subtype_df, ., by = "vial_id") %>% 
+#     filter((str_extract(id_clonality, portion_id_minus_analyte_regex)
+#             == str_extract(id_leuk_frac, portion_id_minus_analyte_regex))) %>%
+#     distinct() %>%
+#     group_by(vial_id, disease, id_clonality, subclonal_frac, subtype) %>% 
+#     summarise(leuk_frac = mean(leuk_frac)) %>% 
+#     ungroup()
+```
+
+\  
+
+## CIBERSORT fraction
+
+### Retrieve/load data
+
+Cellular Content: syn4991611
+syn7337221 ("TCGA.Kallisto.fullIDs.cibersort.relative.tsv")
+
+```{r}
+# ciber_frac_file <- "../data/tcga/TCGA.Kallisto.fullIDs.cibersort.relative.tsv"
+# ciber_frac_df <- read_tsv(ciber_frac_file)
+```
+
+### Sample filtering
+
+```{r}
+# ciber_frac_df <- ciber_frac_df %>%
+#     mutate(id = str_replace_all(SampleID, "\\.", "\\-")) %>% 
+#     filter(!(id %in% exclude_samples$aliquot_barcode)) %>% 
+#     mutate(vial_id = str_replace(id, "(\\-[:alnum:]+){3}$", ""))
+```
+
+### Add CIBERSORT fraction
+
+NOTE: several samples were assayed on multiple plates; average the leukocyte fraction across these before computing correlations.
+
+```{r}
+# clonality_subtype_corr_df <- ciber_frac_df %>% 
+#     select(-CancerType, -SampleID, -P.value, -Correlation, -RMSE) %>% 
+#     dplyr::rename(id_ciber_frac = id) %>% 
+#     left_join(clonality_subtype_corr_df, ., by = "vial_id") %>% 
+#     filter((str_extract(id_clonality, portion_id_minus_analyte_regex)
+#             == str_extract(id_ciber_frac, portion_id_minus_analyte_regex))) %>%
+#     distinct() %>%
+#     select(-id_ciber_frac) %>% 
+#     group_by(vial_id, disease, id_clonality, subclonal_frac, subtype,
+#              leuk_frac) %>%
+#     summarise_each(funs(mean)) %>%
+#     ungroup()
+```
+
+-----
+
+\  
+
+
+
+-----
+
+\  
+
+
+
+

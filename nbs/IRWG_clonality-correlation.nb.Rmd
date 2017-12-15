@@ -1046,9 +1046,8 @@ lhei <- c(2, 0.3, 6)
 
 # PNG graphic device doesn't play well with R Notebooks; copy and paste this
 # chunk to a new R script when ready to save
-
-# png("figures/clonality_leuk_corr.png",
-#     width = 8*300, height = 6*300, res = 300, pointsize = 10)
+cairo_pdf("figures/RelLeuk-CorrITH_perStudy_20170720.pdf",
+    width = 8*300, height = 6*300, fallback_resolution = 300, pointsize = 10)
 
 col_colors <- tibble(disease = colnames(clonality_ciber_frac_corr_mat)) %>%
     left_join(clonality_sig_corr_df %>%
@@ -1076,7 +1075,7 @@ gplots::heatmap.2(clonality_ciber_frac_corr_mat,
                   key.par = list(mgp = c(1.5, 0.5, 0),
                                  mar = c(3, 3, 3, 1))) # change to c(5, 3, 4, 1) for saving
 
-# dev.off()
+dev.off()
 ```
 
 ### With immunomodulators

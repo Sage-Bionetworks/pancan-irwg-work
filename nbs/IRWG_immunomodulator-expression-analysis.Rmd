@@ -1,6 +1,8 @@
 ---
 title: "R Notebook"
 output: html_notebook
+editor_options: 
+  chunk_output_type: inline
 ---
 
 # Summary
@@ -259,65 +261,121 @@ immunomod_zscore_df <- immunomod_expr_df %>%
     dplyr::ungroup()  
 ```
 
-```{r, fig.height=8, fig.width=6}
-immunomod_zscore_df %>% 
+```{r}
+immunomod_subtype_expr_df <- immunomod_zscore_df %>% 
     dplyr::group_by(Subtype_Immune_Model_Based, gene_name) %>% 
-    dplyr::mutate(x_med = median(log_x)) %>% 
+    dplyr::summarise(x_med = median(log_x)) %>% 
     dplyr::ungroup() %>% 
-    ggplot2::ggplot(ggplot2::aes(x = Subtype_Immune_Model_Based, 
-                                 y = gene_name)) +
-    ggplot2::geom_tile(aes(fill = x_med)) +
-    ggplot2::scale_fill_distiller(type = "div", palette = "RdBu") +
-    ggplot2::facet_grid(`Gene Family` ~ Subtype_Immune_Model_Based, 
-                        space = "free", scales = "free", drop = TRUE) +
-    ggplot2::theme(axis.text.x = ggplot2::element_blank(),
-          axis.ticks.x = ggplot2::element_blank(),
-          strip.text.x = ggplot2::element_text(face = "bold", angle = 0, 
-                                               hjust = 0),
-          strip.text.y = ggplot2::element_text(angle = 0, face = "bold", 
-                                               hjust = 0),
-          strip.background = ggplot2::element_blank(),
-          panel.spacing.y = ggplot2::unit(0.5, "points"))
+    dplyr::left_join(immunomod_df, by = c("gene_name" = "HGNC Symbol")) %>% 
+    dplyr::mutate(`Immune Checkpoint` = dplyr::case_when(
+        stringr::str_detect(`Immune Checkpoint`, "^I") ~ "Inhibitory",
+        stringr::str_detect(`Immune Checkpoint`, "^S") ~ "Stimulatory",
+        is.na(`Immune Checkpoint`) ~ "N/A",
+        TRUE ~ `Immune Checkpoint`
+    ))
 ```
-
-### Front-line immunomodulator genes
 
 ```{r}
-immunomod_sub_zscore_df <- immunomod_expr_df %>% 
-    dplyr::select(ParticipantBarcode, Study, Subtype_Immune_Model_Based,
-                  dplyr::contains("RNASeq")) %>% 
-    tidyr::gather(gene_name, x, 
-                  -ParticipantBarcode, -Study, -Subtype_Immune_Model_Based) %>% 
-    dplyr::mutate(gene_name = stringr::str_replace(gene_name, "_RNASeq", ""),
-                  log_x = log(x + 1)) %>% 
-    dplyr::filter(gene_name %in% frontline_immunomod_genes) %>% 
-    dplyr::left_join(immunomod_df, by = c("gene_name" = "HGNC Symbol")) %>% 
-    dplyr::group_by(gene_name) %>% 
-    dplyr::mutate(z_score = (log_x - mean(log_x)) / sd(log_x),
-                  x_perc = log_x / max(log_x)) %>% 
-    dplyr::ungroup()  
-```
-
-```{r, include=FALSE}
-immunomod_sub_zscore_df %>% 
-    dplyr::group_by(Subtype_Immune_Model_Based, gene_name) %>% 
-    dplyr::mutate(x_med = median(log_x)) %>% 
-    dplyr::ungroup() %>% 
+p_expr <- immunomod_subtype_expr_df %>% 
     ggplot2::ggplot(ggplot2::aes(x = Subtype_Immune_Model_Based, 
                                  y = gene_name)) +
-    ggplot2::geom_tile(aes(fill = x_med)) +
-    ggplot2::scale_fill_distiller(type = "div", palette = "RdBu") +
-    ggplot2::facet_grid(`Gene Family` ~ Subtype_Immune_Model_Based, 
+    ggplot2::geom_tile(aes(fill = x_med), 
+                       colour = "gray60", size = 0.5) +
+    ggplot2::scale_y_discrete(position = "right") +
+    ggplot2::scale_fill_distiller("Median Expression", 
+                                  type = "div", palette = "RdBu") +
+    ggplot2::facet_grid(`Super Category` ~ Subtype_Immune_Model_Based, 
                         space = "free", scales = "free", drop = TRUE) +
+    ggplot2::ylab("") +
+    ggplot2::xlab("Immune Subtype") +
     ggplot2::theme(axis.text.x = ggplot2::element_blank(),
           axis.ticks.x = ggplot2::element_blank(),
           strip.text.x = ggplot2::element_text(face = "bold", angle = 0, 
                                                hjust = 0),
-          strip.text.y = ggplot2::element_text(angle = 0, face = "bold", 
-                                               hjust = 0),
+          strip.text.y = ggplot2::element_blank(),
           strip.background = ggplot2::element_blank(),
-          panel.spacing.y = ggplot2::unit(0.5, "points"))
+          panel.spacing.y = ggplot2::unit(1, "points"),
+          panel.spacing.x = ggplot2::unit(1, "points"),
+          legend.position = "right",
+          legend.title = ggplot2::element_text(size = 8))
+p_annot <- immunomod_subtype_expr_df %>% 
+    ggplot2::ggplot(ggplot2::aes(x = 1, 
+                                 y = gene_name)) +
+    ggplot2::geom_tile(aes(fill = `Immune Checkpoint`), 
+                       colour = "gray60", size = 0.5) +
+    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    scale_fill_manual(values = c("#333333", "#888888", "#E69F00")) +
+    ggplot2::facet_grid(`Super Category` ~ ., 
+                        switch = "both",
+                        space = "free", scales = "free", drop = TRUE) +
+    ggplot2::ylab("") + 
+    ggplot2::xlab("") +
+    ggplot2::theme(axis.text.x = ggplot2::element_blank(),
+          axis.ticks.x = ggplot2::element_blank(),
+          axis.text.y = ggplot2::element_blank(),
+          axis.ticks.y = ggplot2::element_blank(),
+          strip.text.y = ggplot2::element_text(angle = 0, face = "bold", 
+                                               hjust = 1),
+          strip.background = ggplot2::element_blank(),
+          panel.spacing.y = ggplot2::unit(1, "points"),
+          legend.position = "top",
+          legend.title = ggplot2::element_text(size = 8))
+p_annot + p_expr + patchwork::plot_layout(nrow = 1, widths = c(1, 12))
 ```
+
+
+```{r}
+immunomod_subytype_expr_mat <- immunomod_subtype_expr_df %>%
+    dplyr::select(gene_name, Subtype_Immune_Model_Based, `Super Category`, x_med) %>% 
+    tidyr::spread(Subtype_Immune_Model_Based, x_med) %>% 
+    dplyr::mutate(mean_expr = sum(C1, C2, C3, C4, C5, C6) / 6) %>% 
+    dplyr::arrange(`Super Category`, mean_expr) %>% 
+    dplyr::select(-`Super Category`, -mean_expr) %>% 
+    tibble::remove_rownames() %>%
+    tibble::column_to_rownames("gene_name") %>%
+    as.matrix()
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+gene_annot_df <- tibble::tibble(label = rownames(immunomod_subytype_expr_mat)) %>% 
+    dplyr::left_join(immunomod_df, by = c("label" = "HGNC Symbol")) %>% 
+    dplyr::mutate(`Immune Checkpoint` = dplyr::case_when(
+        stringr::str_detect(`Immune Checkpoint`, "^I") ~ "Inhibitory",
+        stringr::str_detect(`Immune Checkpoint`, "^S") ~ "Stimulatory",
+        is.na(`Immune Checkpoint`) ~ "N/A",
+        TRUE ~ `Immune Checkpoint`
+    )) %>% 
+    tibble::column_to_rownames("label") %>% 
+    dplyr::select( `Immune Checkpoint`, `Super Category`) %>% 
+    as.data.frame()
+
+category_gaps <- duplicated(gene_annot_df$`Super Category`) %>% 
+    magrittr::not() %>% 
+    which() %>% 
+    magrittr::subtract(1) %>% 
+    .[-1]
+
+gene_annot_cols <- list(
+    `Immune Checkpoint` = c(
+        "Inhibitory" = "#333333",
+        "Stimulatory" = "#E69F00",
+        "N/A" = "#888888"
+    ),
+    `Super Category` = RColorBrewer::brewer.pal(7, "Set1") %>% 
+        set_names(unique(gene_annot_df$`Super Category`))
+)
+pheatmap::pheatmap(immunomod_subytype_expr_mat,
+                   cellheight = 4, cellwidth = 10,
+                   color = rev(RColorBrewer::brewer.pal(11, "RdBu")),
+                   annotation_row = gene_annot_df, 
+                   annotation_colors = gene_annot_cols,
+                   annotation_names_row = FALSE,
+                   cluster_cols = FALSE, cluster_rows = FALSE,
+                   gaps_row = category_gaps,
+                   fontsize = 6)
+```
+
 
 ## PCA
 
@@ -490,7 +548,7 @@ immunomod_expr_pca_df %>%
 
 #### Per-subtype bi-plots
 
-```{r, fig.height=7, fig.width=5}
+```{r, fig.asp=1.1}
 bg_df <- immunomod_expr_pca_df %>% 
     tidyr::spread(PC, value) %>% 
     dplyr::select(-Subtype_Immune_Model_Based)
@@ -520,84 +578,12 @@ immunomod_expr_pca_df %>%
 #        width = 6, height = 10, units = "cm", dpi = 300, scale = 2)
 ```
 
-### Front-line immunomodulator genes
 
-```{r}
-# convert expression df to matrix
-immunomod_sub_expr_mat <- immunomod_expr_df %>%
-    dplyr::select(ParticipantBarcode, dplyr::contains("RNASeq")) %>% 
-    
-    tidyr::gather(gene_name, x, -ParticipantBarcode) %>%
-    dplyr::mutate(gene_name = str_replace(gene_name, "_RNASeq", "")) %>% 
-    dplyr::filter(gene_name %in% frontline_immunomod_genes) %>% 
-    dplyr::mutate(log_x = log(x + 1)) %>%
-    dplyr::select(gene_name, ParticipantBarcode, log_x) %>%
-    tidyr::spread(ParticipantBarcode, log_x) %>%
-    tibble::remove_rownames() %>%
-    tibble::column_to_rownames("gene_name") %>%
-    as.matrix()
-
-immunomod_sub_expr_pca <- immunomod_sub_expr_mat %>%
-    t() %>%
-    prcomp()
-```
-
-#### Extract and format PC data
-
-```{r, warning=FALSE}
-pc_df <- immunomod_sub_expr_pca %>% 
-    broom::tidy("pcs")
-
-immunomod_sub_expr_pca_df <- immunomod_sub_expr_pca %>% 
-    broom::tidy("samples") %>% 
-    dplyr::filter(PC <= 2) %>% 
-    dplyr::left_join(irwg_fmx_df, by = c("row" = "ParticipantBarcode"))
-```
-
-
-#### Plot top PCs
-
-```{r, fig.height=7, fig.width=5, include=FALSE}
-pc1_label <- pc_df %>% 
-    dplyr::filter(PC == 1) %>% 
-    dplyr::transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
-    purrr::flatten_chr()
-
-pc2_label <- pc_df %>% 
-    dplyr::filter(PC == 2) %>% 
-    dplyr::transmute(label = sprintf("PC%s [%0.2f%%]", PC, 100*percent)) %>% 
-    purrr::flatten_chr()
-
-bg_df <- immunomod_sub_expr_pca_df %>% 
-    tidyr::spread(PC, value) %>% 
-    dplyr::select(-Subtype_Immune_Model_Based)
-
-immunomod_sub_expr_pca_df %>% 
-    tidyr::spread(PC, value) %>% 
-    ggplot2::ggplot(aes(x = `1`, y = `2`)) +
-    ggplot2::geom_point(data = bg_df, 
-                        colour = "gray", size = 1.5, alpha = 0.5) +
-    ggplot2::geom_point(ggplot2::aes(fill = Subtype_Immune_Model_Based), 
-                        size = 1.5, alpha = 0.8, shape = 21, colour = "black", 
-                        stroke = 0.2) +
-    ggplot2::scale_fill_manual(values = subtype_colors) +
-    ggplot2::guides(fill = FALSE) +
-    ggplot2::xlab(pc1_label) +
-    ggplot2::ylab(pc2_label) +
-    ggplot2::facet_wrap(~ Subtype_Immune_Model_Based, ncol = 2) +
-    ggplot2::ggtitle("PCA of immunomodulator expression across all tumor types") +
-    ggplot2::theme(title = ggplot2::element_text(size = 8),
-                   axis.title.x = ggplot2::element_text(size = 8),
-                   axis.title.y = ggplot2::element_text(size = 8)) +
-    ggplot2::coord_fixed()
-
-# ggplot2::ggsave("../figures/Immunomod-SubtypePCA_20170720.pdf", p,
-#        width = 6, height = 10, units = "cm", dpi = 300, scale = 2)
-```
 
 ## Clustering
 
-```{r, fig.height=10, fig.width=8}
+```{r, fig.asp=1.2}
+skip_heatmap <- TRUE
 df1 <- tibble::tibble(label = colnames(immunomod_expr_mat)) %>%
     dplyr::left_join(immunomod_expr_df, 
                      by = c("label" = "ParticipantBarcode")) %>% 
@@ -652,7 +638,9 @@ ht <- ComplexHeatmap::Heatmap(immunomod_expr_mat, name = "log(Expression)",
                         column_dend_height = unit(2, "cm"),
                         row_names_gp = gpar(fontsize = 8),
                         top_annotation = ha)
-ComplexHeatmap::draw(ht + ra, annotation_legend_side = "bottom")
+if (!skip_heatmap) {
+    ComplexHeatmap::draw(ht + ra, annotation_legend_side = "bottom")    
+}
 ```
 
 

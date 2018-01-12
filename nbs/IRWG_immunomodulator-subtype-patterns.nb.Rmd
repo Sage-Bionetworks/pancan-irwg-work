@@ -1,0 +1,280 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Summary
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE, cache=FALSE}
+# Synapse client
+library(synapseClient)
+
+# viz packages
+library(ggthemes)
+library(viridis)
+library(ggrepel)
+library(ggbeeswarm)
+library(ComplexHeatmap)
+library(circlize)
+library(patchwork)
+
+# packages for general data munging, formatting
+library(feather)
+library(stringr)
+library(forcats)
+library(broom)
+library(tidyverse)
+
+# analysis packages
+library(car)
+library(vegan)
+
+my_theme_bw <- function() {
+    theme_bw() +
+        theme(axis.title = element_text(face = "bold", size = rel(0.9)),
+              legend.title = element_text(face = "bold"),
+              plot.title = element_text(face = "bold"))
+}
+
+?scale_fill_distiller
+ggplot2::theme_set(my_theme_bw())
+scale_fill_discrete <- function(...) scale_fill_colorblind(...)
+scale_fill_continuous <- function(...) scale_fill_distiller(..., 
+                                                            type = "div",
+                                                            palette = "RdBu")
+scale_colour_discrete <- function(...) scale_color_colorblind(...)
+# scale_colour_continuous <- function(...) scale_color_viridis(...)
+
+subtype_colors <- c("red", "yellow", "green", "cyan", "blue", "magenta")
+```
+
+# Prepare data
+
+## Retrieve and load data
+
+### IRWG feature matrix (Synapse)
+
+```{r}
+if (!dir.exists("../data")) {
+    dir.create("../data")
+}
+synapseLogin()
+```
+
+*NOTE:* requires SFTP authentication
+
+```{r}
+irwg_fmx_file <- synapseClient::synGet("syn11187757", 
+                                       downloadLocation = "../data/irwg/")
+load(irwg_fmx_file@filePath)
+irwg_fmx_df <- df
+rm(df)
+```
+
+### Immunomodulator gene table (Google Sheets)
+
+List of genes accessed [here](https://docs.google.com/spreadsheets/d/1aqOXYsU1ubkbxIZI_5p8ZRootgOAT0KweMA3LvSZ7HY/edit#gid=0) and saved as a TSV at `data/Cancer Immunomodulators - TCGA PanImmune Group - Direct Relationship.tsv`:
+
+```{r}
+im_url <- "https://docs.google.com/spreadsheets/d/1aqOXYsU1ubkbxIZI_5p8ZRootgOAT0KweMA3LvSZ7HY/edit#gid=0"
+googlesheets::gs_auth()
+im_gs <- googlesheets::gs_url(im_url)
+```
+
+```{r}
+im_df <- googlesheets::gs_read(im_gs) %>% 
+    dplyr::filter(!is.na(Gene))
+```
+
+### Immunomodulator expression
+
+```{r include=FALSE}
+im_subtype_logexpr_df <- readr::read_csv("../data/intermediate/subtype_immunomodulator_expr.csv")
+```
+
+
+### Methylation-immunomodulator correlations (Synapse)
+
+```{r}
+im_methcorr_file <- synapseClient::synGet("syn11630210",
+                                          downloadLocation = "../data/irwg/")
+im_methcorr_df <- readr::read_csv(im_methcorr_file@filePath)
+```
+
+
+### Immunomodulator CNV data (Synapse)
+
+```{r}
+im_cnv_amp_file <- synapseClient::synGet("syn11673281",
+                                          downloadLocation = "../data/irwg/")
+im_cnv_amp_df <- readr::read_tsv(im_cnv_amp_file@filePath) %>% 
+    purrr::set_names(c("gene_name", "C1", "C2", "C3", "C4", "C5", "C6"))
+```
+
+```{r}
+im_cnv_del_file <- synapseClient::synGet("syn11673280",
+                                          downloadLocation = "../data/irwg/")
+im_cnv_del_df <- readr::read_tsv(im_cnv_del_file@filePath) %>% 
+    purrr::set_names(c("gene_name", "C1", "C2", "C3", "C4", "C5", "C6"))
+```
+
+## Format data for analysis
+
+```{r}
+im_subtype_feature_df <- im_subtype_logexpr_df %>% 
+    dplyr::left_join(im_cnv_amp_df %>% 
+                         tidyr::gather(Subtype_Immune_Model_Based, amp_diff,
+                                       -gene_name),
+                     by = c("Subtype_Immune_Model_Based", "gene_name")) %>% 
+    dplyr::left_join(im_cnv_del_df %>% 
+                         tidyr::gather(Subtype_Immune_Model_Based, del_diff,
+                                       -gene_name),
+                     by = c("Subtype_Immune_Model_Based", "gene_name")) %>% 
+    dplyr::left_join(im_methcorr_df %>% 
+                         mutate(Subtype_Immune_Model_Based = str_c("C", SubType)) %>% 
+                         group_by(Subtype_Immune_Model_Based, Symbol) %>% 
+                         summarise(spearman = mean(spearman)),
+                     by = c("Subtype_Immune_Model_Based", "gene_name" = "Symbol"))
+```
+
+
+```{r, warning=FALSE}
+im_ordered <- im_subtype_feature_df %>% 
+    select(`Super Category`, gene_name, Subtype_Immune_Model_Based, 
+           x_med, spearman, amp_diff, del_diff) %>% 
+    nest(-`Super Category`) %>% 
+    mutate(data = map(data, function(df) {
+        df %>% 
+            nest(-Subtype_Immune_Model_Based) %>%
+            mutate(data = map2(data, Subtype_Immune_Model_Based, function(x, y) {
+                x %>%
+                    gather(stat, val, -gene_name) %>%
+                    mutate(stat = str_c(stat, y, sep = "_"))
+            }
+            )) %>%
+            unnest() %>% 
+            select(-Subtype_Immune_Model_Based) %>%
+            spread(stat, val) %>%
+            remove_rownames() %>%
+            column_to_rownames("gene_name") %>%
+            as.matrix() %>%
+            dist() %>%
+            hclust()
+    })) %>% 
+    mutate(data = map(data, function(hc) {
+        tibble(gene_name = hc$labels[hc$order], gene_pos = seq_along(hc$labels))
+    })) %>% 
+    unnest() %>% 
+    mutate(gene_pos = as.character(gene_pos),
+           gene_pos = str_pad(gene_pos, 2, side = "left", pad = "0"),
+           gene_order = str_c(`Super Category`, gene_pos, sep = "_")) %>% 
+    arrange(gene_order) %>% 
+    pluck("gene_name")
+
+im_subtype_feature_df <- im_subtype_feature_df %>% 
+    mutate(gene_name = factor(gene_name, levels = im_ordered),
+           Subtype_Immune_Model_Based = str_replace(Subtype_Immune_Model_Based,
+                                                    "C", ""))
+```
+
+
+## Viz
+
+```{r, fig.asp=1.2}
+
+heatmap_panel <- function(df, panel_scale, panel_label, scale_label) {
+    df %>% 
+        ggplot2::ggplot(ggplot2::aes(x = Subtype_Immune_Model_Based, 
+                                     y = gene_name)) +
+        ggplot2::geom_tile(aes_string(fill = panel_scale), 
+                           colour = "gray60", size = 0.3) +
+        ggplot2::scale_fill_distiller(scale_label, 
+                                      type = "div", palette = "RdBu") +
+        ggplot2::facet_grid(`Super Category` ~ Subtype_Immune_Model_Based, 
+                            space = "free", scales = "free", drop = TRUE) +
+        ggplot2::ylab("") +
+        ggplot2::xlab(panel_label) +
+        ggplot2::theme(axis.text.x = ggplot2::element_blank(),
+                       axis.text.y = ggplot2::element_blank(),
+                       axis.ticks.x = ggplot2::element_blank(),
+                       axis.ticks.y = ggplot2::element_blank(),
+                       axis.title.x = ggplot2::element_text(size = 8, angle = 45,
+                                                            hjust = 1, vjust = 1),
+                       strip.text.x = ggplot2::element_text(face = "bold", 
+                                                            angle = 0,
+                                                            hjust = 0, 
+                                                            size = 8,
+                                                            margin = margin(l = 1, b = 2)),
+                       strip.text.y = ggplot2::element_blank(),
+                       strip.background = ggplot2::element_blank(),
+                       panel.spacing.y = ggplot2::unit(4, "points"),
+                       panel.spacing.x = ggplot2::unit(1, "points"),
+                       legend.position = "top",
+                       legend.title = ggplot2::element_text(size = 8),
+                       legend.text = ggplot2::element_text(size = 7, angle = 45, hjust = 1, vjust = 1),
+                       legend.key.width = ggplot2::unit(12, "points")) +
+        ggplot2::guides(fill = ggplot2::guide_colorbar(title.position = "top"))
+}
+
+p_expr <- im_subtype_feature_df %>% 
+    filter(`Super Category` != "Antigen presentation") %>% 
+    heatmap_panel("x_med", "mRNA Expression", "Median log10(x)")
+p_methcorr <- im_subtype_feature_df %>% 
+    filter(`Super Category` != "Antigen presentation") %>% 
+    heatmap_panel("spearman", "Expression-Methylation", "Spearman Corr.")
+p_cnv_amp <- im_subtype_feature_df %>% 
+    filter(`Super Category` != "Antigen presentation") %>% 
+    heatmap_panel("amp_diff", "Amplification", "Freq. (O - E)")
+p_cnv_del <- im_subtype_feature_df %>% 
+    filter(`Super Category` != "Antigen presentation") %>% 
+    heatmap_panel("del_diff", "Deletion", "Freq. (O - E)")
+
+p_annot <- im_subtype_feature_df %>% 
+    filter(`Super Category` != "Antigen presentation") %>% 
+    ggplot2::ggplot(ggplot2::aes(x = 1, 
+                                 y = gene_name)) +
+    ggplot2::geom_tile(aes(fill = `Immune Checkpoint`), 
+                       colour = "gray60", size = 0.3) +
+    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::scale_y_discrete(position = "right") +
+    scale_fill_manual(values = c("#333333", "#888888", "#E69F00")) +
+    ggplot2::facet_grid(`Super Category` ~ ., 
+                        switch = "both",
+                        space = "free", scales = "free", drop = TRUE) +
+    ggplot2::ylab("") + 
+    ggplot2::xlab("") +
+    ggplot2::theme(axis.text.x = ggplot2::element_blank(),
+          axis.ticks.x = ggplot2::element_blank(),
+          axis.text.y = ggplot2::element_text(size = 7),
+          axis.ticks.y = ggplot2::element_blank(),
+          strip.text.y = ggplot2::element_text(angle = 180, face = "bold", 
+                                               hjust = 1, size = 8),
+          strip.background = ggplot2::element_blank(),
+          panel.spacing.y = ggplot2::unit(5, "points"),
+          legend.position = "top",
+          legend.direction = "vertical",
+          legend.title = ggplot2::element_text(size = 8),
+          legend.text = ggplot2::element_text(size = 7),
+          legend.key.size = ggplot2::unit(10, "points")) +
+    ggplot2::guides(fill = ggplot2::guide_legend(title.position = "top"))
+
+p_all <- p_annot + p_expr + p_methcorr + p_cnv_amp + p_cnv_del + 
+    patchwork::plot_layout(nrow = 1, widths = c(2, 15, 15, 15, 15))
+p_all
+# ggsave("../figures/im_subtype_heatmaps.pdf", plot = p_all, width = 15, height = 20, units = "cm")
+
+```
+
+```{r}
+im_subtype_feature_df %>% 
+    filter(x_med > 0) %>% 
+    gather(direction, rel_freq, amp_diff, del_diff) %>% 
+    ggplot(aes(y = rel_freq, x = x_med)) +
+    ggplot2::geom_point(ggplot2::aes(fill = spearman), 
+                        size = 2.5, alpha = 0.8, shape = 21, colour = "black", 
+                        stroke = 0.2) +
+    facet_grid(direction ~ Subtype_Immune_Model_Based) +
+    scale_fill_viridis_c(option = "D")
+```
+
+-----

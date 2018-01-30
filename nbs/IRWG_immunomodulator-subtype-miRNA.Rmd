@@ -1,6 +1,9 @@
 ---
-title: "R Notebook"
-output: html_notebook
+title: "Exploring immunomodulator-miRNA correlation across immune subtypes"
+output: 
+  html_notebook:
+      toc: true
+      toc_float: true
 editor_options: 
   chunk_output_type: inline
 ---
@@ -46,7 +49,6 @@ scale_fill_continuous <- function(...) scale_fill_distiller(...,
                                                             type = "div",
                                                             palette = "RdBu")
 scale_colour_discrete <- function(...) scale_color_colorblind(...)
-# scale_colour_continuous <- function(...) scale_color_viridis(...)
 
 subtype_colors <- c("red", "yellow", "green", "cyan", "blue", "magenta")
 
@@ -86,10 +88,10 @@ mirna_synfiles <- synapseQuery(
 
 # download files and store data/paths in new data frame
 mirna_files <- mirna_synfiles %>% 
-    mutate(file_data = map(file.id, function(synid) {
-        synGet(synid, downloadLocation = "../data/tcga/")
+    dplyr::mutate(file_data = purrr::map(file.id, function(synid) {
+        synapseClient::synGet(synid, downloadLocation = "../data/tcga/")
     }),
-    file_path = map_chr(file_data, getFileLocation))
+    file_path = purrr::map_chr(file_data, getFileLocation))
 ```
 
 
@@ -143,16 +145,17 @@ if (!file.exists(mirna_logexpr_file) | force_read) {
         dplyr::mutate(portion_id = stringr::str_extract(
             AliquotBarcode, portion_id_minus_analyte_regex
         )) %>% 
-        dplyr::inner_join(im_expr_df %>% 
-                              dplyr::select(
-                                  ParticipantBarcode,
-                                  Representative_Expression_Matrix_AliquotBarcode
-                              ) %>% 
-                              dplyr::mutate(portion_id = stringr::str_extract(
-                                  Representative_Expression_Matrix_AliquotBarcode, 
-                                  portion_id_minus_analyte_regex
-                              )),
-                          by = "portion_id") %>% 
+        dplyr::inner_join(
+            im_expr_df %>% 
+                dplyr::select(
+                    ParticipantBarcode,
+                    Representative_Expression_Matrix_AliquotBarcode
+                ) %>% 
+                dplyr::mutate(portion_id = stringr::str_extract(
+                    Representative_Expression_Matrix_AliquotBarcode, 
+                    portion_id_minus_analyte_regex
+                )),
+            by = "portion_id") %>% 
         dplyr::select(ParticipantBarcode, gene_name, x) %>% 
         dplyr::mutate(log_x = log(x + 1))
     
@@ -172,7 +175,7 @@ force_compute <- FALSE
 if (!file.exists(im_mirna_corr_file) | force_compute) {
     
     s_list <- im_expr_df %>%
-        pluck("Subtype_Immune_Model_Based") %>% 
+        purrr::pluck("Subtype_Immune_Model_Based") %>% 
         as.character() %>% 
         unique() %>% 
         sort()
@@ -182,19 +185,23 @@ if (!file.exists(im_mirna_corr_file) | force_compute) {
             dplyr::filter(Subtype_Immune_Model_Based == s) %>% 
             dplyr::select(ParticipantBarcode, Subtype_Immune_Model_Based,
                           dplyr::contains("RNASeq")) %>% 
-            tidyr::gather(gene_name, x, 
-                          -ParticipantBarcode, -Subtype_Immune_Model_Based) %>% 
-            dplyr::mutate(gene_name = stringr::str_replace(gene_name, "_RNASeq", ""),
-                          log_x = log(x + 1)) %>% 
+            tidyr::gather(
+                gene_name, x, 
+                -ParticipantBarcode, -Subtype_Immune_Model_Based
+            ) %>% 
+            dplyr::mutate(
+                gene_name = stringr::str_replace(gene_name, "_RNASeq", ""),
+                log_x = log(x + 1)
+            ) %>% 
             dplyr::filter(!is.na(log_x))
         
         target_df <- mirna_logexpr_df %>% 
             dplyr::filter(ParticipantBarcode %in% source_df$ParticipantBarcode,
                           !is.na(log_x))
         
-        corr_df <- inner_join(source_df, target_df,
-                              by = "ParticipantBarcode",
-                              suffix = c("_source", "_target")) %>% 
+        corr_df <- dplyr::inner_join(source_df, target_df,
+                                     by = "ParticipantBarcode",
+                                     suffix = c("_source", "_target")) %>% 
             dplyr::group_by(gene_name_source, gene_name_target) %>% 
             dplyr::do(broom::tidy(
                 cor.test(.$log_x_source, .$log_x_target, method = "spearman")
@@ -204,7 +211,6 @@ if (!file.exists(im_mirna_corr_file) | force_compute) {
         return(corr_df)
     })
         
-    
     im_mirna_corr_df <- bind_rows(corr_df_list, .id = "subtype")
     write_feather(im_mirna_corr_df, im_mirna_corr_file)
 } else {
@@ -217,9 +223,13 @@ if (!file.exists(im_mirna_corr_file) | force_compute) {
 ### Regulator miRs
 
 ```{r}
-mirna_causal_df <- readxl::read_excel("../data/causal_TCGA_panCancer_miRNA_immuneInfiltrate_3_15_2017.xlsx") %>% 
+mirna_causal_df <- readxl::read_excel(
+    "../data/causal_TCGA_panCancer_miRNA_immuneInfiltrate_3_15_2017.xlsx"
+) %>% 
     .[, 1:9] %>% 
-    mutate(mirna_disease = str_c(`miRNA Name`, `Tumor Type`, sep = "_"))
+    dplyr::mutate(
+        mirna_disease = stringr::str_c(`miRNA Name`, `Tumor Type`, sep = "_")
+    )
 ```
 
 ### Known immune miRs
@@ -230,161 +240,188 @@ mirna_immune_df <- readxl::read_excel("../data/Paladini_immune_miRNAs.xlsx")
 
 ```{r}
 mirna_immune_tidy_df <- mirna_immune_df %>%
-    mutate(mirna_group = str_split(MicroRNAs, ",")) %>%
-    unnest(mirna_group) %>%
-    mutate(mirna_group = str_trim(mirna_group, "both")) %>%
-    mutate(mirna = mirna_group) %>%
-    filter(!str_detect(mirna_group, "[0-9]+[a-z]{2,}")) %>% 
-    mutate(mirna = str_replace(mirna, "miR-17/92 cluster", "miR-17,miR-18a,miR-19a,miR-20a,miR-19b-1,miR-92a-1"),
-           mirna = str_replace(mirna, "miR-212/132 cluster", "miR-212,miR-132"),
-           mirna = str_replace(mirna, "miR-10 family", "miR-10a,miR-10b,miR-99a,miR-99b,miR-100,miR-125a,miR-125b-1,miR-125b-2"),
-           mirna = str_replace(mirna, "miR-221/222", "miR-221,miR-222"),
-           mirna = str_replace(mirna, "miR-10a/b", "miR-10a,miR-10b"),
-           mirna = str_replace(mirna, "miR-148/152", "miR-148,miR-152"),
-           mirna = str_replace(mirna, "miR-17-5p/20a", "miR-17-5p,miR-20a"),
-           mirna = str_replace(mirna, "miR-221/222 cluster", "miR-221,miR-222"),
-           mirna = str_replace(mirna, "miR-181a/b", "miR-181a,miR-181b"),
-           mirna = str_replace(mirna, "miR-15/16", "miR-15,miR-16"),
-           mirna = str_replace(mirna, "miR-181 family", "miR-181a-1,miR-181a-2,miR-181b-1,miR-181b-2,miR-181c,miR-181d"),
-           mirna = str_replace(mirna, "miR-130/301", "miR-130,miR-301"),
-           mirna = str_replace(mirna, "miR-99a/miR-150", "miR-99a,miR-150"),
-           mirna = str_replace(mirna, "Let", "let")) %>%
-    mutate(mirna = str_split(mirna, ",")) %>% 
-    unnest(mirna)
+    dplyr::mutate(mirna_group = stringr::str_split(MicroRNAs, ",")) %>%
+    tidyr::unnest(mirna_group) %>%
+    dplyr::mutate(mirna_group = stringr::str_trim(mirna_group, "both")) %>%
+    dplyr::mutate(mirna = mirna_group) %>%
+    dplyr::filter(!stringr::str_detect(mirna_group, "[0-9]+[a-z]{2,}")) %>% 
+    dplyr::mutate(
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-17/92 cluster", 
+            "miR-17,miR-18a,miR-19a,miR-20a,miR-19b-1,miR-92a-1"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-212/132 cluster", 
+            "miR-212,miR-132"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-10 family", 
+            "miR-10a,miR-10b,miR-99a,miR-99b,miR-100,miR-125a,miR-125b-1,miR-125b-2"
+        ),
+        mirna = stringr::str_replace(
+            mirna,
+            "miR-221/222",
+            "miR-221,miR-222"
+        ),
+        mirna = stringr::str_replace(
+            mirna,
+            "miR-10a/b", 
+            "miR-10a,miR-10b"
+        ),
+        mirna = stringr::str_replace(
+            mirna,
+            "miR-148/152", 
+            "miR-148,miR-152"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-17-5p/20a", 
+            "miR-17-5p,miR-20a"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-221/222 cluster", 
+            "miR-221,miR-222"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-181a/b",
+            "miR-181a,miR-181b"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-15/16",
+            "miR-15,miR-16"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-181 family",
+            "miR-181a-1,miR-181a-2,miR-181b-1,miR-181b-2,miR-181c,miR-181d"
+        ),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-130/301",
+            "miR-130,miR-301"),
+        mirna = stringr::str_replace(
+            mirna, 
+            "miR-99a/miR-150", 
+            "miR-99a,miR-150"),
+        mirna = stringr::str_replace(
+            mirna, 
+            "Let",
+            "let"
+        )
+    ) %>%
+    dplyr::mutate(mirna = stringr::str_split(mirna, ",")) %>% 
+    tidyr::unnest(mirna)
 ```
 
 ### Predicted binding targets
 
 ```{r}
-mirna_target_df <- read_tsv("../data/miRDB_v5.0_prediction_result.txt", col_names = FALSE) %>% 
-    set_names(c("mirna", "gene", "score")) %>% 
-    filter(str_detect(mirna, "hsa"))
+mirna_target_df <- readr::read_tsv(
+    "../data/miRDB_v5.0_prediction_result.txt", col_names = FALSE
+) %>% 
+    purrr::set_names(c("mirna", "gene", "score")) %>% 
+    dplyr::filter(stringr::str_detect(mirna, "hsa"))
 ```
 
 ```{r}
-mirna_mrna_target_df <- read_tsv("../data/synergizer.tsv", skip = 4) %>% 
-    mutate(refseq_mrna = str_split(refseq_mrna, " ")) %>% 
-    unnest(refseq_mrna) %>% 
-    filter(refseq_mrna %in% mirna_target_df$gene) %>% 
-    left_join(mirna_target_df, by = c("refseq_mrna" = "gene")) %>% 
-    mutate(mirna_target = str_c(mirna, hgnc_symbol, sep = "_"))
+mirna_mrna_target_df <- readr::read_tsv("../data/synergizer.tsv", skip = 4) %>% 
+    dplyr::mutate(refseq_mrna = stringr::str_split(refseq_mrna, " ")) %>% 
+    tidyr::unnest(refseq_mrna) %>% 
+    dplyr::filter(refseq_mrna %in% mirna_target_df$gene) %>% 
+    dplyr::left_join(mirna_target_df, by = c("refseq_mrna" = "gene")) %>% 
+    dplyr::mutate(mirna_target = stringr::str_c(mirna, hgnc_symbol, sep = "_"))
 ```
 
 ### Combined evidence
 
 ```{r}
 im_mirna_support_df <- im_mirna_corr_df %>%
-    filter(!is.na(p.adjust), 
-           p.adjust < 0.05) %>% 
-    select(subtype, mirna = gene_name_target, mrna = gene_name_source,
-           estimate, p.adjust) %>% 
-    mutate(mirna_target = str_c(mirna, mrna, sep = "_"),
-           mirna_subtype = str_c(mirna, subtype, sep = "_"),
-           mirna_short = str_extract(mirna, "(?<=hsa\\-).*"),
-           mirna_short_ambiguous = str_extract(mirna_short,
-                                               "[:alnum:]+\\-[:alnum:]+")) %>%
-    mutate(mirbase_support = (estimate < 0) & 
-               mirna_target %in% mirna_mrna_target_df$mirna_target, 
-           immune_support = mirna_short %in% mirna_immune_tidy_df$mirna |
-               mirna_short_ambiguous %in% mirna_immune_tidy_df$mirna) %>% 
-    #        strong = abs(estimate) > 0.5,
-    #        immune_strong = immune_support & strong) %>% 
-I
-
+    dplyr::filter(!is.na(p.adjust), 
+                  p.adjust < 0.05) %>% 
+    dplyr::select(subtype, mirna = gene_name_target, mrna = gene_name_source,
+                  estimate, p.adjust) %>% 
+    dplyr::mutate(
+        mirna_target = stringr::str_c(mirna, mrna, sep = "_"),
+        mirna_subtype = stringr::str_c(mirna, subtype, sep = "_"),
+        mirna_short = stringr::str_extract(mirna, "(?<=hsa\\-).*"),
+        mirna_short_ambiguous = stringr::str_extract(mirna_short,
+                                                     "[:alnum:]+\\-[:alnum:]+")
+    ) %>%
+    dplyr::mutate(
+        mirbase_support = (estimate < 0) & 
+            mirna_target %in% mirna_mrna_target_df$mirna_target, 
+        immune_support = mirna_short %in% mirna_immune_tidy_df$mirna |
+            mirna_short_ambiguous %in% mirna_immune_tidy_df$mirna,
+        strong = abs(estimate) > 0.5,
+        immune_strong = immune_support & strong
+    )
 ```
 
+-----
 
 # Viz
 
-```{r}
-# im_mirna_support_df %>%
-#     filter(mirbase_support & immune_support) %>% 
-#     dplyr::left_join(im_df, by = c("mrna" = "HGNC Symbol")) %>% 
-#     mutate(end3p = str_detect(mirna_short, "3p$")) %>% 
-#     # filter(mirna_short_ambiguous == "miR-182") %>%
-#     ggplot(aes(x = 1, y = mirna_short_ambiguous)) +
-#     geom_dotplot(aes(fill = subtype, colour = end3p), dotsize = 12,
-#                  binaxis = "y", stackgroups = TRUE, positions = "all") +
-#     scale_colour_manual(values = c("black", "#CCCCCC")) +
-#     scale_fill_manual(values = subtype_colors) +
-#     xlab("") +
-#     ylab("") +
-#     guides(colour = FALSE,
-#            fill = guide_legend(title = element_blank())) +
-#     theme(axis.text.x = element_blank(),
-#           axis.ticks.x = element_blank(),
-#           legend.position = "top",
-#           strip.text.x = element_text(face = "bold", angle = 0, hjust = 0),
-#           strip.text.y = element_text(angle = 0, face = "bold", hjust = 0),
-#           strip.background = element_blank(),
-#           panel.spacing.y = unit(1, "points")) +
-#     facet_grid(`Super Category` + mrna ~ ., scales = "free_y", space = "free_y", drop = TRUE) %>%
-#     I
-```
-
 ```{r, fig.asp=0.6}
 p <- im_mirna_support_df %>%
-    filter(mirbase_support & immune_support) %>% 
-    group_by(mrna) %>%
-    mutate(num_subtype_gene = n_distinct(subtype)) %>%
-    group_by(mirna) %>%
-    mutate(num_subtype_mirna = n_distinct(subtype),
-           num_im_mirna = n_distinct(mrna)) %>%
-    ungroup() %>%
-    filter(num_subtype_gene > 1,
-           num_subtype_mirna > 1,
-           num_im_mirna > 2) %>%
-    dplyr::left_join(im_df, by = c("mrna" = "HGNC Symbol")) %>% 
-    mutate(end3p = str_detect(mirna_short, "3p$")) %>% 
-    ggplot(aes(x = mirna_short, y = mrna)) +
-    geom_tile(aes(fill = estimate),
-              colour = "gray60", size = 0.3) +
-    scale_fill_distiller("Spearman Corr.", type = "seq", palette = "Blues") +
-    scale_colour_manual(values = c("black", "#CCCCCC")) +
-    xlab("") +
-    ylab("") +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 7),
-          axis.text.y = element_text(size = 7),
-          strip.text.x = element_text(face = "bold", angle = 0, hjust = 0, 
-                                      size = 8, 
-                                      margin = margin(l = 2, b = 2)),
-          strip.text.y = element_blank(),
-          # strip.text.y = element_text(angle = 0, face = "bold", hjust = 0, size = 8),
-          strip.background = element_blank(),
-          panel.spacing.y = unit(4, "points"),
-          panel.spacing.x = unit(2, "points"),
-          legend.position = "top",
-          legend.title = ggplot2::element_text(size = 8),
-          legend.text = ggplot2::element_text(size = 7, angle = 45, hjust = 1, vjust = 1),
-          legend.key.width = ggplot2::unit(12, "points")) +
-    ggplot2::guides(fill = ggplot2::guide_colorbar(title.position = "top")) +
-    facet_grid(`Super Category` ~ subtype, 
-               scales = "free", space = "free", drop = TRUE)
+    dplyr::filter(mirbase_support, estimate <= -0.2) %>% 
+    dplyr::group_by(mirna, mrna) %>% 
+    dplyr::mutate(
+        num_subtype_assoc = dplyr::n_distinct(subtype, na.rm = TRUE)
+    ) %>%
+    dplyr::group_by(mrna) %>%
+    dplyr::mutate(num_subtype_gene = dplyr::n_distinct(subtype)) %>%
+    dplyr::group_by(mirna) %>%
+    dplyr::mutate(num_subtype_mirna = dplyr::n_distinct(subtype),
+                  num_im_mirna = dplyr::n_distinct(mrna)) %>%
+    dplyr::ungroup() %>%
+    dplyr::filter(num_subtype_gene > 0,
+                  num_subtype_mirna > 2,
+                  num_im_mirna > 0) %>%
+    dplyr::mutate(
+        recurring = num_subtype_assoc > 1,
+        mir_num = as.integer(stringr::str_extract(mirna_short, 
+                                                  "(?<=(miR-))[0-9]+"))
+    ) %>%
+    dplyr::arrange(mir_num) %>% 
+    dplyr::mutate(mirna_short = forcats::fct_inorder(mirna_short)) %>% 
+    dplyr::left_join(im_df, by = c("mrna" = "HGNC Symbol")) %>%
+    ggplot2::ggplot(ggplot2::aes(x = mirna_short, y = mrna)) +
+    ggplot2::geom_tile(ggplot2::aes(fill = estimate, colour = recurring),
+                       size = 0.3) +
+    ggplot2::scale_fill_distiller("Spearman Corr.", type = "seq", 
+                                  palette = "Blues", limits = c(-0.55, 0)) +
+    ggplot2::scale_colour_manual(values = c("#CCCCCC", "black")) +
+    ggplot2::xlab("") +
+    ggplot2::ylab("") +
+    my_theme_bw() +
+    ggplot2::theme(
+        axis.text.x = ggplot2::element_text(angle = 90, hjust = 1, 
+                                            vjust = 1, size = 7),
+        axis.text.y = ggplot2::element_text(size = 7),
+        strip.text.x = ggplot2::element_text(
+            face = "bold", angle = 0, hjust = 0,
+            size = 8, margin = ggplot2::margin(l = 2, b = 2)
+        ),
+        strip.text.y = ggplot2::element_blank(),
+        strip.background = ggplot2::element_blank(),
+        panel.spacing.y = ggplot2::unit(4, "points"),
+        panel.spacing.x = ggplot2::unit(2, "points"),
+        legend.title = ggplot2::element_text(size = 8),
+        legend.text = ggplot2::element_text(size = 7),
+        legend.key.width = ggplot2::unit(12, "points")
+    ) +
+    ggplot2::guides(fill = ggplot2::guide_colorbar(title.position = "top"),
+                    colour = FALSE) +
+    ggplot2::facet_grid(`Super Category` ~ subtype,
+                        scales = "free", space = "free", drop = TRUE)
 p
-# ggsave("../figures/im_subtype_mirna.pdf", plot = p, width = 12, height = 9, units = "cm")
+# ggsave("../figures/im_subtype_mirna.pdf", plot = p, width = 17.4, height = 10, units = "cm")
 ```
 
-```{r}
-im_mirna_support_df %>%
-    filter(mirbase_support & immune_support) %>% 
-    group_by(mrna) %>%
-    mutate(num_subtype_gene = n_distinct(subtype)) %>%
-    group_by(mirna) %>%
-    mutate(num_subtype_mirna = n_distinct(subtype),
-           num_im_mirna = n_distinct(mrna)) %>%
-    ungroup() %>%
-    filter(num_subtype_gene > 0,
-           num_subtype_mirna > 0,
-           num_im_mirna > 2) %>%
-    dplyr::left_join(im_df, by = c("mrna" = "HGNC Symbol")) %>% 
-    mutate(end3p = str_detect(mirna_short, "3p$")) %>% 
-    select(1:4) %>% 
-    distinct(mirna) %>% 
-    # ggplot(aes(x, id = id, split = y)) +
-    # geom_parallel_sets(aes(fill = subtype))
-    I
-    # ggplot(aes(weight = estimate, axis1 = as.factor(mrna), axis2 = as.factor(mirna_short))) +
-    # geom_alluvium(aes(fill = subtype), width = 1/12, na.rm = TRUE) +
-    # geom_stratum(width = 1/2, fill = "black", na.rm = TRUE)
-```
 
